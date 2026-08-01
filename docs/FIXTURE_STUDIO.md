@@ -306,14 +306,54 @@ consist/
 
 ---
 
-## 10. Tech notes (non-binding)
+## 10. UI stack (interactive Studio)
+
+Studio must feel like a real editor: **drag nodes**, **click to select**, **connect ports**, **forms for text/numbers**, not a static diagram.
+
+### 10.1 Recommended DEFAULT
+
+| Layer | Choice | Why |
+|-------|--------|-----|
+| App shell | **React + Vite + TypeScript** | Fast local dev, huge ecosystem for forms/DnD |
+| Topology canvas | **[React Flow](https://reactflow.dev/)** (`@xyflow/react`) | Built for node editors: drag, select, connect, custom nodes, minimap, undo-friendly patterns; **MIT**, no commercial license |
+| Forms / panels | **React** controlled inputs (+ optional **shadcn/ui** or plain CSS) | Class request fields, occupancy toggles, booking legs |
+| State | **Zustand** or React context | World + selection + dirty flag for export |
+| Port fabric detail | Custom node interiors in React Flow **or** side-panel SVG | Ports as connection handles on nodes |
+
+**Why React Flow over Cytoscape for Studio:** Cytoscape is strong for *analysis / highlight*; React Flow is strong for *authoring* (the interaction model Studio needs). Keep Cytoscape only in the design walkthrough HTML if you want; Studio can be a separate app.
+
+### 10.2 Interaction map (what the lib must support)
+
+| User action | Implementation sketch |
+|-------------|------------------------|
+| Drag Car / Yard | React Flow node drag; persist `layout.json` x,y |
+| Click device | Selection → right panel (config, seats, legal pairs) |
+| Connect cable | Edge create from **out handle** → **in handle** (1:1 out rule in editor) |
+| Delete / close edge | Delete = remove cable; “closed” = occupancy flag (not geometry) |
+| Add booking leg | List UI + Class dropdown + request form |
+| Export | Button → download JSON fixtures |
+
+### 10.3 Alternatives (if not React)
+
+| Stack | When |
+|-------|------|
+| **Vue + Vue Flow** | Team prefers Vue; same interaction model as React Flow |
+| **Svelte Flow** | Prefer Svelte |
+| **Konva / Fabric.js** | Full freeform canvas; you reimplement node/edge UX yourself — slower |
+| **JointJS (Rappid free tier / community)** | Classic diagramming; heavier API, license check for advanced |
+| **Plain SVG + pointer events** | Only for a tiny prototype; not DEFAULT for full Studio |
+
+**Avoid for Studio:** libraries aimed only at static viz or analytics graphs without first-class connect/drag handles.
+
+### 10.4 Other notes
 
 | Concern | Guidance |
 |---------|----------|
-| Graph UI | Prefer **simple SVG/Canvas** or light graph lib; **GoJS** only if building a long-lived editor with budget for license (see design discussion). Do not block Phase A on GoJS. |
-| Port fabric | Same teaching model as design HTML (ports + legal pairs); reuse ideas, not necessarily the same file. |
-| Hosting | Local `vite`/`static` app is enough; no production deploy required. |
-| Engine bridge (Phase D) | HTTP to local Consist service, or shared fixture runner CLI: `consist-test fixtures/G1`. |
+| Port-level truth | Handles = track ids; edges store `from: {device, track}` / `to: {device, track}` matching BUILD_SPEC Cable |
+| Accessibility | Keyboard select + panel forms for fields that must be precise (ids, seats) |
+| Hosting | Local Vite app; no production deploy required |
+| Engine bridge (Phase D) | HTTP to local Consist service, or CLI `consist-test fixtures/G1` |
+| Offline | Prefer npm-bundled deps (same spirit as design docs vendor/) |
 
 ---
 
@@ -368,6 +408,7 @@ Engine goldens G1–G12 remain **required** for the domain. Studio accelerates *
 | Walkthrough HTML | Keep for teaching; fixtures for machine tests |
 | Studio → Kotlin bridge | **JSON fixtures + parameterized JUnit loader** (not generated `.kt` per case) |
 | Kotlin model | Shared `@Serializable` DTOs aligned with BUILD_SPEC |
+| Studio UI stack | **React + Vite + React Flow (`@xyflow/react`)** + form panels; MIT |
 
 ---
 

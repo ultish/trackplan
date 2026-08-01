@@ -277,11 +277,12 @@ Kotlin golden runner (load JSON → resolve → assert) can ship with the engine
 
 1. **Rail vocabulary only** — Class, Car, Yard, Cable, Hop, Booking, Leg, Consist, prefilter, accept.  
 2. **Port-first** — show IN/OUT tracks; hops are `in:device:out`.  
-3. **One cable per out** (DEFAULT in Studio for toy mode) — matches current design; advanced multiplex is opt-in later.  
-4. **Separate geometry from occupancy** — “delete cable” ≠ “close cable for this test.”  
-5. **Scenarios are fixtures**, not slides — multi-step script object, not PowerPoint.  
-6. **Offline-friendly** for local use; no CDN hard dependency for core authoring (same spirit as design docs).  
-7. **Determinism** — export sorted ids; no random node positions in golden files (layout may be separate `layout.json` if needed).
+3. **Drag-to-link** — create cables by dragging from an **out** port on a Car/Yard to an **in** port on another; reposition devices by dragging nodes.  
+4. **One cable per out** (DEFAULT in Studio for toy mode) — matches current design; advanced multiplex is opt-in later.  
+5. **Separate geometry from occupancy** — “delete cable” ≠ “close cable for this test.”  
+6. **Scenarios are fixtures**, not slides — multi-step script object, not PowerPoint.  
+7. **Offline-friendly** for local use; no CDN hard dependency for core authoring (same spirit as design docs).  
+8. **Determinism** — export sorted ids; no random node positions in golden files (layout may be separate `layout.json` if needed).
 
 ---
 
@@ -326,12 +327,23 @@ Studio must feel like a real editor: **drag nodes**, **click to select**, **conn
 
 | User action | Implementation sketch |
 |-------------|------------------------|
-| Drag Car / Yard | React Flow node drag; persist `layout.json` x,y |
-| Click device | Selection → right panel (config, seats, legal pairs) |
-| Connect cable | Edge create from **out handle** → **in handle** (1:1 out rule in editor) |
+| Drag Car / Yard on canvas | React Flow node drag; persist `layout.json` x,y |
+| **Drag to link** Car ↔ Yard (or Car ↔ Car) | Primary way to create **cables**: pointer down on an **out** port/handle → drag → drop on an **in** port/handle → new edge. Same for Yard↔Yard. |
+| Click device | Selection → right panel (config, seats, legal pairs, ports) |
+| Click port | Highlight legal mates; optional “connect mode” if not dragging |
+| Connect cable (rules) | Edge only **out → in**; **one cable per out** in toy mode (reject second drop on same out); store BUILD_SPEC `Cable { from, to }` |
 | Delete / close edge | Delete = remove cable; “closed” = occupancy flag (not geometry) |
 | Add booking leg | List UI + Class dropdown + request form |
 | Export | Button → download JSON fixtures |
+
+**Drag-to-link detail (DEFAULT UX):**
+
+1. User hovers an **OUT** track on a Car or Yard → handle highlights.  
+2. Drag starts a temporary connection line (React Flow `onConnectStart` / connection line).  
+3. Drop on a valid **IN** track of another device → cable created; invalid targets (same device, in→in, busy out) show reject cursor / toast.  
+4. Optional: drag from palette (“add Car”, “add Yard”) onto canvas to place nodes, then link with port-to-port drag as above.
+
+This is first-class authoring — not “edit JSON edges by hand.”
 
 ### 10.3 Alternatives (if not React)
 
@@ -409,6 +421,7 @@ Engine goldens G1–G12 remain **required** for the domain. Studio accelerates *
 | Studio → Kotlin bridge | **JSON fixtures + parameterized JUnit loader** (not generated `.kt` per case) |
 | Kotlin model | Shared `@Serializable` DTOs aligned with BUILD_SPEC |
 | Studio UI stack | **React + Vite + React Flow (`@xyflow/react`)** + form panels; MIT |
+| Linking devices | **Drag out-port → in-port** (Cars and Yards); not form-only edge lists |
 
 ---
 

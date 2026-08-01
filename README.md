@@ -18,6 +18,7 @@ Start here: **[docs/README.md](./docs/README.md)**
 | [docs/SPEC.md](./docs/SPEC.md) | Full design handoff |
 | [docs/BUILD_SPEC.md](./docs/BUILD_SPEC.md) | Implementer contracts + goldens G1–G12 |
 | [docs/booking-assembler-design.html](./docs/booking-assembler-design.html) | Interactive walkthroughs (offline) |
+| [docs/FIXTURE_STUDIO.md](./docs/FIXTURE_STUDIO.md) | Fixture Studio design (topology + booking test UI — not built yet) |
 
 ```bash
 open docs/SPEC.md

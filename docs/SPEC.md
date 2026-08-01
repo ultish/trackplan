@@ -12,6 +12,7 @@
 | **This file (`SPEC.md`)** | Full picture, rationale, open questions, handoff checklist |
 | [`BUILD_SPEC.md`](./BUILD_SPEC.md) | Implementable contracts: schemas, defaults, goldens G1–G12, Kotlin notes |
 | [`booking-assembler-design.html`](./booking-assembler-design.html) | Interactive scenarios + diagrams (offline via `docs/vendor/`) |
+| [`FIXTURE_STUDIO.md`](./FIXTURE_STUDIO.md) | Design for golden-authoring UI (not implemented) |
 | [`README.md`](./README.md) | Index |
 
 **Builder prompt (copy-paste):**
@@ -638,8 +639,10 @@ docs/
   BUILD_SPEC.md                   ← implementer contracts + goldens
   README.md                       ← index
   booking-assembler-design.html   ← interactive (prefilter/accept, multi-yard, …)
+  FIXTURE_STUDIO.md               ← topology + booking golden UI (design only)
   vendor/                         ← cytoscape + mermaid (offline)
 ```
+
 
 ---
 

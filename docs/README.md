@@ -12,6 +12,7 @@ The domain object **consist** (bound Cars + route) is intentional — the system
 | **1** | **[SPEC.md](./SPEC.md)** | **Full handoff:** problem, architecture, Assembler↔Coupler contract, prefilter vs accept, multi-Yard discovery, sticky/cache, decision log, open questions, work packages |
 | **2** | **[BUILD_SPEC.md](./BUILD_SPEC.md)** | Implementable contracts: schemas, algorithms, API, policy defaults, goldens G1–G12, Kotlin notes, phases |
 | **3** | **[booking-assembler-design.html](./booking-assembler-design.html)** | Interactive scenarios + track-level fabric (offline) |
+| — | **[FIXTURE_STUDIO.md](./FIXTURE_STUDIO.md)** | **Design only:** web UI to build topology + bookings → golden fixtures (not implemented) |
 
 ### Copy-paste builder prompt
 

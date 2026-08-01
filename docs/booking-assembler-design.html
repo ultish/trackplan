@@ -1,0 +1,3864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Consist — Design Notes (Rail Model)</title>
+  <!-- Offline: vendored under docs/vendor/ (no CDN) -->
+  <script src="vendor/mermaid.min.js"></script>
+  <script src="vendor/cytoscape.min.js"></script>
+  <script>
+    if (typeof mermaid !== "undefined") {
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "dark",
+        themeVariables: {
+          primaryColor: "#1e3a5f",
+          primaryTextColor: "#e7eef8",
+          primaryBorderColor: "#5b9fd4",
+          lineColor: "#8b9bb4",
+          secondaryColor: "#243044",
+          tertiaryColor: "#1a2332",
+          background: "#0f1419",
+          mainBkg: "#1a2332",
+          nodeBorder: "#5b9fd4",
+          clusterBkg: "#1a2332",
+          titleColor: "#e7eef8",
+          edgeLabelBackground: "#1a2332",
+        },
+        flowchart: { curve: "basis", padding: 12 },
+      });
+    }
+  </script>
+  <style>
+    :root {
+      --bg: #0c1017;
+      --bg2: #121a24;
+      --panel: #161f2c;
+      --panel2: #1c2736;
+      --border: #2a3a52;
+      --text: #e8eef7;
+      --muted: #8b9bb4;
+      --faint: #5c6b82;
+      --accent: #7dd3fc;
+      --accent2: #5b9fd4;
+      --ok: #34d399;
+      --warn: #e0b44a;
+      --bad: #f87171;
+      --yard: #ff8c69;
+      --class-a: #5b9fd4;
+      --class-b: #6bcf8e;
+      --class-d: #e0b44a;
+      --class-z: #d47ad4;
+      --radius: 12px;
+      --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --max: 920px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+      font-size: 16px;
+    }
+    /* layout */
+    .shell {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      min-height: 100vh;
+    }
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+      nav.toc { position: relative !important; height: auto !important; border-right: none; border-bottom: 1px solid var(--border); }
+    }
+    nav.toc {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      background: var(--bg2);
+      border-right: 1px solid var(--border);
+      padding: 1.25rem 1rem 2rem;
+      font-size: 0.82rem;
+    }
+    nav.toc .brand {
+      font-weight: 700;
+      font-size: 0.95rem;
+      margin-bottom: 0.25rem;
+      letter-spacing: -0.02em;
+    }
+    nav.toc .brand-sub {
+      color: var(--muted);
+      font-size: 0.75rem;
+      margin-bottom: 1.25rem;
+      line-height: 1.35;
+    }
+    nav.toc a {
+      display: block;
+      color: var(--muted);
+      text-decoration: none;
+      padding: 0.28rem 0.5rem;
+      border-radius: 6px;
+      margin-bottom: 1px;
+    }
+    nav.toc a:hover { color: var(--text); background: rgba(125,211,252,0.08); }
+    nav.toc a.sub { padding-left: 1rem; font-size: 0.78rem; color: var(--faint); }
+    main {
+      padding: 2rem 2rem 4rem;
+      max-width: calc(var(--max) + 4rem);
+    }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 750;
+      letter-spacing: -0.03em;
+      margin: 0 0 0.5rem;
+      line-height: 1.2;
+    }
+    .lede {
+      color: var(--muted);
+      font-size: 1.05rem;
+      max-width: 40rem;
+      margin: 0 0 2rem;
+    }
+    h2 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin: 2.75rem 0 0.85rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--border);
+      letter-spacing: -0.02em;
+    }
+    h2:first-of-type { border-top: none; }
+    h3 {
+      font-size: 1.02rem;
+      font-weight: 650;
+      margin: 1.5rem 0 0.6rem;
+      color: #c5d4e8;
+    }
+    h4 { font-size: 0.92rem; margin: 1.1rem 0 0.45rem; color: var(--muted); font-weight: 650; }
+    p { margin: 0.55rem 0 0.85rem; max-width: 42rem; }
+    ul, ol { max-width: 42rem; color: var(--text); }
+    li { margin: 0.3rem 0; }
+    li::marker { color: var(--faint); }
+    strong { font-weight: 650; color: #f0f5fc; }
+    code, .mono {
+      font-family: var(--mono);
+      font-size: 0.86em;
+      background: rgba(0,0,0,0.35);
+      padding: 0.12em 0.38em;
+      border-radius: 4px;
+      color: #c4e4ff;
+    }
+    pre {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.1rem;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      line-height: 1.45;
+      color: #c8d6e8;
+      max-width: 48rem;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.15rem 1.25rem;
+      margin: 1rem 0 1.25rem;
+      max-width: 48rem;
+    }
+    .panel.accent { border-color: rgba(125,211,252,0.35); }
+    .panel h3 { margin-top: 0; }
+    .callout {
+      border-left: 3px solid var(--accent);
+      background: rgba(125,211,252,0.06);
+      padding: 0.75rem 1rem;
+      margin: 1rem 0;
+      border-radius: 0 8px 8px 0;
+      max-width: 42rem;
+      font-size: 0.95rem;
+    }
+    .callout.warn { border-left-color: var(--warn); background: rgba(224,180,74,0.08); }
+    .callout.ok { border-left-color: var(--ok); background: rgba(52,211,153,0.07); }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      max-width: 48rem;
+      font-size: 0.88rem;
+      margin: 0.75rem 0 1.25rem;
+    }
+    th, td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.65rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: var(--panel2);
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    td { background: rgba(22,31,44,0.5); }
+    .mermaid {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      margin: 1rem 0;
+      max-width: 48rem;
+      overflow-x: auto;
+    }
+    /* interactive walkthrough */
+    .walk {
+      background: linear-gradient(165deg, #141c28 0%, #101820 100%);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.25rem;
+      margin: 1.25rem 0 1.75rem;
+      max-width: 52rem;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+    }
+    .walk-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .walk-header h3 {
+      margin: 0;
+      font-size: 1rem;
+      color: var(--text);
+    }
+    .walk-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .walk-controls button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel2);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 0.4rem 0.75rem;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .walk-controls button:hover:not(:disabled) {
+      border-color: var(--accent2);
+      background: #243448;
+    }
+    .walk-controls button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .walk-controls button.primary {
+      background: rgba(125,211,252,0.15);
+      border-color: rgba(125,211,252,0.45);
+      color: var(--accent);
+    }
+    /* Sticky nav while viewing fabric — stays on screen while scrolling */
+    .walk-sticky-nav {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem 0.75rem;
+      margin: 0 0 0.85rem;
+      padding: 0.55rem 0.75rem;
+      background: rgba(12, 16, 23, 0.92);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(125,211,252,0.35);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    }
+    .walk-sticky-nav .sticky-meta {
+      font-size: 0.78rem;
+      color: var(--muted);
+      min-width: 0;
+      flex: 1 1 12rem;
+    }
+    .walk-sticky-nav .sticky-meta strong {
+      color: var(--text);
+      display: block;
+      font-size: 0.88rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .walk-sticky-nav .sticky-keys {
+      font-size: 0.72rem;
+      color: var(--faint);
+      width: 100%;
+    }
+    .walk-float-nav {
+      position: fixed;
+      bottom: 1rem;
+      right: 1rem;
+      z-index: 50;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0.35rem;
+      pointer-events: none;
+    }
+    .walk-float-nav .walk-controls {
+      pointer-events: auto;
+      padding: 0.45rem;
+      background: rgba(12, 16, 23, 0.94);
+      border: 1px solid rgba(125,211,252,0.4);
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+    }
+    .walk-float-nav .float-hint {
+      pointer-events: none;
+      font-size: 0.68rem;
+      color: var(--faint);
+      background: rgba(12,16,23,0.85);
+      padding: 0.2rem 0.45rem;
+      border-radius: 6px;
+    }
+    @media (max-width: 700px) {
+      .walk-float-nav { right: 0.5rem; bottom: 0.5rem; }
+    }
+    /* Keep step controls on the fabric card itself */
+    .fabric-card-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      margin: -0.25rem -0.25rem 0.5rem;
+      padding: 0.35rem 0.4rem;
+      background: rgba(18, 24, 34, 0.94);
+      backdrop-filter: blur(8px);
+      border-radius: 8px;
+      border: 1px solid transparent;
+    }
+    .fabric-card-head h4 {
+      margin: 0;
+      flex: 1 1 auto;
+    }
+    .fabric-inline-nav button {
+      min-width: 2.4rem;
+      padding-left: 0.55rem;
+      padding-right: 0.55rem;
+    }
+    .step-meta {
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+    .step-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin: 0.35rem 0 0.5rem;
+    }
+    .step-body {
+      color: var(--muted);
+      font-size: 0.92rem;
+      margin-bottom: 1rem;
+      max-width: none;
+    }
+    .step-body strong { color: var(--text); }
+    .dots {
+      display: flex;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--border);
+    }
+    .dot.on { background: var(--accent); box-shadow: 0 0 8px rgba(125,211,252,0.6); }
+    .dot.done { background: var(--ok); }
+    .viz-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.85rem;
+    }
+    @media (max-width: 700px) {
+      .viz-grid { grid-template-columns: 1fr; }
+    }
+    .viz-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.85rem;
+      min-height: 140px;
+    }
+    .viz-card h4 {
+      margin: 0 0 0.6rem;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--faint);
+    }
+    .consist {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.35rem;
+      min-height: 2rem;
+    }
+    .car-chip {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      padding: 0.35rem 0.55rem;
+      border-radius: 6px;
+      border: 1.5px solid;
+      background: rgba(0,0,0,0.25);
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.1rem;
+      line-height: 1.2;
+    }
+    .car-chip .chip-id { font-weight: 700; }
+    .car-chip .chip-hop {
+      font-size: 0.62rem;
+      font-weight: 500;
+      opacity: 0.85;
+      letter-spacing: 0.02em;
+    }
+    .car-chip.a { border-color: var(--class-a); color: var(--class-a); }
+    .car-chip.b { border-color: var(--class-b); color: var(--class-b); }
+    .car-chip.d { border-color: var(--class-d); color: var(--class-d); }
+    .car-chip.yard {
+      border-color: var(--yard);
+      color: var(--yard);
+      background: rgba(255,140,105,0.08);
+    }
+    .car-chip.yard.on-path {
+      box-shadow: 0 0 0 1px rgba(125,211,252,0.45);
+      background: rgba(125,211,252,0.1);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .car-chip.ghost {
+      border-style: dashed;
+      opacity: 0.45;
+      color: var(--faint);
+      border-color: var(--faint);
+    }
+    .car-chip.locked {
+      box-shadow: 0 0 0 1px rgba(52,211,153,0.4);
+    }
+    .consist-legend {
+      font-size: 0.72rem;
+      color: var(--faint);
+      margin-top: 0.45rem;
+    }
+    .ctx {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--accent);
+      background: rgba(125,211,252,0.08);
+      padding: 0.5rem 0.65rem;
+      border-radius: 6px;
+    }
+    .ctx.empty { color: var(--faint); }
+    .path-hops {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      align-items: center;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+    .hop {
+      background: rgba(125,211,252,0.12);
+      border: 1px solid rgba(125,211,252,0.35);
+      color: var(--accent);
+      padding: 0.25rem 0.4rem;
+      border-radius: 4px;
+    }
+    .hop.dim { opacity: 0.35; }
+    .hop-arrow { color: var(--faint); }
+    .layer-tag {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 0.2rem 0.45rem;
+      border-radius: 4px;
+      margin-right: 0.35rem;
+    }
+    .layer-tag.outer { background: rgba(91,159,212,0.2); color: var(--class-a); }
+    .layer-tag.inner { background: rgba(255,140,105,0.15); color: var(--yard); }
+    .svg-wrap {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.75rem;
+      margin: 1rem 0;
+      max-width: 48rem;
+      overflow-x: auto;
+    }
+    svg.diagram { width: 100%; height: auto; display: block; }
+    .toc-section {
+      color: var(--faint);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin: 1rem 0 0.35rem;
+      padding-left: 0.5rem;
+    }
+    .kbd {
+      font-family: var(--mono);
+      font-size: 0.75em;
+      border: 1px solid var(--border);
+      padding: 0.05em 0.35em;
+      border-radius: 4px;
+      background: var(--panel2);
+    }
+    footer.note {
+      margin-top: 3rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--faint);
+      font-size: 0.85rem;
+      max-width: 42rem;
+    }
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      max-width: 48rem;
+    }
+    @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+    .mini-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+    }
+    .mini-card h4 { margin: 0 0 0.4rem; color: var(--text); font-size: 0.9rem; text-transform: none; letter-spacing: 0; }
+    .mini-card p { margin: 0; font-size: 0.85rem; color: var(--muted); max-width: none; }
+
+    /* richer walkthrough */
+    .scenario-picker {
+      background: linear-gradient(180deg, #1a2838 0%, #141c28 100%);
+      border: 1px solid rgba(125,211,252,0.35);
+      border-radius: 12px;
+      padding: 0.85rem 1rem 1rem;
+      margin: 0 0 1rem;
+      max-width: 54rem;
+    }
+    .scenario-picker .picker-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent);
+      margin: 0 0 0.5rem;
+    }
+    .scenario-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      margin: 0 0 0.65rem;
+    }
+    .scenario-tabs button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--panel2);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.82rem;
+      font-weight: 650;
+      padding: 0.5rem 0.85rem;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .scenario-tabs button:hover { border-color: var(--accent2); background: #2a3a52; }
+    .scenario-tabs button.active {
+      background: rgba(125,211,252,0.2);
+      border-color: rgba(125,211,252,0.65);
+      color: #e0f2fe;
+      box-shadow: 0 0 0 1px rgba(125,211,252,0.25);
+    }
+    .scenario-select-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem 0.75rem;
+      margin-bottom: 0.5rem;
+    }
+    .scenario-select-row label {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .scenario-select-row select {
+      font: inherit;
+      font-size: 0.88rem;
+      font-weight: 600;
+      padding: 0.4rem 0.65rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0c1017;
+      color: var(--text);
+      min-width: 16rem;
+    }
+    .scenario-blurb {
+      font-size: 0.88rem;
+      color: var(--muted);
+      max-width: none;
+      margin: 0;
+      line-height: 1.45;
+    }
+    .scenario-blurb strong { color: var(--text); }
+    .walk { max-width: 54rem; }
+    .phase-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 0.25rem 0.55rem;
+      border-radius: 999px;
+      margin-bottom: 0.5rem;
+    }
+    .phase-pill.assembler { background: rgba(91,159,212,0.18); color: var(--class-a); }
+    .phase-pill.coupler { background: rgba(255,140,105,0.16); color: var(--yard); }
+    .phase-pill.system { background: rgba(52,211,153,0.12); color: var(--ok); }
+    .phase-pill.fail { background: rgba(248,113,113,0.14); color: var(--bad); }
+    .cand-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    .cand {
+      display: grid;
+      grid-template-columns: 4.2rem 4.2rem 5.2rem 1fr;
+      gap: 0.4rem;
+      align-items: start;
+      font-size: 0.78rem;
+      font-family: var(--mono);
+      padding: 0.35rem 0.45rem;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.22);
+      border: 1px solid transparent;
+    }
+    .cand.pass { border-color: rgba(52,211,153,0.35); }
+    .cand.fail { border-color: rgba(248,113,113,0.3); opacity: 0.85; }
+    .cand.busy { border-color: rgba(224,180,74,0.35); }
+    .cand.picked {
+      border-color: var(--ok);
+      box-shadow: 0 0 0 1px rgba(52,211,153,0.35);
+      background: rgba(52,211,153,0.1);
+    }
+    .cand .cid { color: var(--text); font-weight: 700; }
+    .cand .st { text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.04em; }
+    .cand .st.pass { color: var(--ok); }
+    .cand .st.fail { color: var(--bad); }
+    .cand .st.busy { color: var(--warn); }
+    .cand .st.picked { color: var(--ok); }
+    .cand .stage {
+      font-size: 0.62rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 0.1rem 0.25rem;
+      border-radius: 3px;
+      text-align: center;
+    }
+    .cand .stage.prefilter {
+      background: rgba(91,159,212,0.2);
+      color: var(--class-a);
+    }
+    .cand .stage.accept {
+      background: rgba(255,140,105,0.18);
+      color: var(--yard);
+    }
+    .cand .stage.bind {
+      background: rgba(52,211,153,0.15);
+      color: var(--ok);
+    }
+    .cand .why { color: var(--muted); font-family: var(--font); font-size: 0.8rem; }
+    .fabric-svg {
+      width: 100%;
+      height: auto;
+      display: block;
+      background: #0e1520;
+      border-radius: 8px;
+    }
+    .fabric-svg .port-dot { transition: stroke 0.15s, fill 0.15s; }
+    .fabric-svg .xpt { transition: stroke 0.15s, stroke-width 0.15s; }
+    .fabric-svg .node { fill: #1a2332; stroke: #3d4f6a; stroke-width: 1.5; }
+    .fabric-svg .node.car-a { stroke: #5b9fd4; }
+    .fabric-svg .node.car-b { stroke: #6bcf8e; }
+    .fabric-svg .node.car-d { stroke: #e0b44a; }
+    .fabric-svg .node.yard { stroke: #ff8c69; fill: #2a1f1a; }
+    .fabric-svg .node.dim { opacity: 0.35; }
+    .fabric-svg .node.on {
+      stroke-width: 2.5;
+      filter: drop-shadow(0 0 4px rgba(125,211,252,0.55));
+    }
+    .fabric-svg .node.goal { stroke: #34d399; }
+    .fabric-svg .node.blocked { stroke: #f87171; }
+    .fabric-svg .edge {
+      fill: none;
+      /* stroke set via JS classes — do not pin color here or setAttribute is ignored */
+      stroke-width: 2.2;
+      opacity: 0.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .fabric-svg .edge.idle {
+      stroke: #4a6080;
+      stroke-width: 2.2;
+      opacity: 0.75;
+    }
+    .fabric-svg .edge.on {
+      stroke: #7dd3fc !important;
+      stroke-width: 4 !important;
+      opacity: 1;
+      filter: drop-shadow(0 0 4px rgba(125,211,252,0.65));
+    }
+    .fabric-svg .edge.done {
+      stroke: #34d399 !important;
+      stroke-width: 3.2 !important;
+      opacity: 1;
+    }
+    .fabric-svg .edge.blocked {
+      stroke: #f87171 !important;
+      stroke-width: 3 !important;
+      stroke-dasharray: 6 4;
+      opacity: 1;
+    }
+    .fabric-svg .edge.illegal {
+      stroke: #f87171;
+      stroke-width: 1.5;
+      stroke-dasharray: 3 3;
+      opacity: 0.5;
+    }
+    .fabric-svg text {
+      font-family: ui-monospace, Menlo, monospace;
+      font-size: 10px;
+      fill: #8b9bb4;
+    }
+    .fabric-svg text.lbl-on { fill: #e7eef8; font-weight: 700; }
+    .failure-box {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      line-height: 1.45;
+      background: rgba(248,113,113,0.08);
+      border: 1px solid rgba(248,113,113,0.35);
+      color: #fecaca;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      white-space: pre-wrap;
+    }
+    .legs-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-bottom: 0.75rem;
+    }
+    .leg-pill {
+      font-size: 0.72rem;
+      font-family: var(--mono);
+      padding: 0.3rem 0.5rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: rgba(0,0,0,0.2);
+    }
+    .leg-pill.active { border-color: var(--accent); color: var(--accent); }
+    .leg-pill.done { border-color: rgba(52,211,153,0.45); color: var(--ok); }
+    .leg-pill.fail { border-color: rgba(248,113,113,0.5); color: var(--bad); }
+    .step-counter {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--faint);
+    }
+    .topo-map {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.1rem 1.1rem;
+      margin: 0 0 1rem;
+      max-width: 54rem;
+    }
+    .topo-map h3 {
+      margin: 0 0 0.35rem;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--faint);
+      font-weight: 650;
+    }
+    .topo-map .topo-intro {
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin: 0 0 0.85rem;
+      max-width: none;
+    }
+    .topo-columns {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.65rem;
+    }
+    @media (max-width: 800px) {
+      .topo-columns { grid-template-columns: 1fr 1fr; }
+    }
+    .topo-col {
+      background: rgba(0,0,0,0.22);
+      border-radius: 8px;
+      padding: 0.55rem 0.65rem;
+      border-top: 3px solid var(--border);
+    }
+    .topo-col.ref { border-top-color: var(--class-a); }
+    .topo-col.norm { border-top-color: var(--class-b); }
+    .topo-col.dock { border-top-color: var(--class-d); }
+    .topo-col.yards { border-top-color: var(--yard); }
+    .topo-col h4 {
+      margin: 0 0 0.4rem;
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .topo-col.ref h4 { color: var(--class-a); }
+    .topo-col.norm h4 { color: var(--class-b); }
+    .topo-col.dock h4 { color: var(--class-d); }
+    .topo-col.yards h4 { color: var(--yard); }
+    .topo-item {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      padding: 0.28rem 0.35rem;
+      margin-bottom: 0.25rem;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.03);
+      color: var(--text);
+      border: 1px solid transparent;
+    }
+    .topo-item .role {
+      display: block;
+      font-family: var(--font);
+      font-size: 0.68rem;
+      color: var(--muted);
+      margin-top: 0.1rem;
+    }
+    .topo-item.hl {
+      border-color: rgba(125,211,252,0.45);
+      background: rgba(125,211,252,0.1);
+    }
+    .topo-item.picked {
+      border-color: rgba(52,211,153,0.5);
+      background: rgba(52,211,153,0.12);
+    }
+    .topo-item.fail-hl {
+      border-color: rgba(248,113,113,0.4);
+      opacity: 0.75;
+    }
+    .topo-booking {
+      margin-top: 0.75rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      padding-top: 0.65rem;
+      border-top: 1px solid var(--border);
+    }
+    .topo-booking strong { color: var(--text); }
+    .topo-booking code { font-size: 0.78em; }
+    .topo-graph-wrap {
+      background: #0a1018;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin: 0.5rem 0 0.75rem;
+      position: relative;
+    }
+    #topoGraph {
+      width: 100%;
+      height: 360px;
+      min-height: 320px;
+      border-radius: 10px;
+    }
+    .topo-graph-hint {
+      position: absolute;
+      right: 0.65rem;
+      bottom: 0.45rem;
+      font-size: 0.7rem;
+      color: var(--faint);
+      pointer-events: none;
+    }
+    .topo-legend-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 0.35rem;
+    }
+    .topo-legend-row i {
+      display: inline-block;
+      width: 18px;
+      height: 3px;
+      vertical-align: middle;
+      margin-right: 0.35rem;
+      border-radius: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="toc" aria-label="Table of contents">
+      <div class="brand">Consist</div>
+      <div class="brand-sub">Consist · rail model · interactive</div>
+      <div class="toc-section">Start</div>
+      <a href="#intro">Why this doc</a>
+      <a href="#terminology">Terminology</a>
+      <a href="#big-picture">Big picture</a>
+      <a href="#walkthrough">Interactive walkthroughs</a>
+      <a href="#walkthrough" class="sub">Scenarios</a>
+      <div class="toc-section">Core</div>
+      <a href="#layers">Outer vs inner</a>
+      <a href="#assembler">Assembler</a>
+      <a href="#astar">Coupler (A* / BFS)</a>
+      <a href="#yards">Yards &amp; tracks</a>
+      <a href="#heuristics">Heuristics</a>
+      <div class="toc-section">Ops</div>
+      <a href="#performance">Performance</a>
+      <a href="#explosion">Graph explosion</a>
+      <a href="#failures">Failure reasons</a>
+      <a href="#cache">Sticky &amp; negative cache</a>
+      <div class="toc-section">More</div>
+      <a href="#recommend">What else to document</a>
+      <a href="#open">Open questions</a>
+    </nav>
+
+    <main>
+      <h1>Consist — design notes</h1>
+      <p class="lede">
+        <strong>Consist</strong> turns ordered <strong>Class + Setup</strong> legs into a
+        growing <strong>consist</strong> of <strong>Cars</strong>, coupled through <strong>Yards</strong>
+        on numbered tracks — deterministically, with sticky reuse, and with
+        explanations when we fail.
+      </p>
+
+      <h2 id="intro">Why this doc</h2>
+      <p>
+        This captures the shared model for <strong>Consist</strong>: vocabulary,
+        the two-layer algorithm (Assembler + Coupler), performance, failure
+        reporting, and how we stop the yard mesh from exploding.
+      </p>
+      <div class="callout">
+        <strong>Format:</strong> HTML for interactive diagrams and walkthroughs.
+        Index: <code>docs/README.md</code>. Deep-link a scenario with
+        <code>?scenario=simple|multiyard|loopback|prefilter|nosol|sticky</code>.
+      </div>
+
+      <!-- ========== TERMINOLOGY ========== -->
+      <h2 id="terminology">Terminology (rail model only)</h2>
+      <p>Use these words in product, code, and docs. Avoid domain synonyms unless bridging to an older system.</p>
+
+      <table>
+        <thead>
+          <tr><th>Term</th><th>Meaning</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Class</strong></td>
+            <td>A catalog role or car-kind you can request (e.g. Refrigerated, Normal, Docking). Many Cars implement one Class.</td>
+          </tr>
+          <tr>
+            <td><strong>Car</strong></td>
+            <td>One concrete unit of a Class (identity you can claim).</td>
+          </tr>
+          <tr>
+            <td><strong>Setup</strong></td>
+            <td>Costly mode on a Car or Yard. Changing setup takes time and may drop live traffic. Prefer reuse / piggyback. Each Class has its own allowed Setups.</td>
+          </tr>
+          <tr>
+            <td><strong>Inspector</strong></td>
+            <td>
+              Per-Class rules (unique implementation) that answer:
+              <em>“Does this Car — with its live config/Setup — satisfy leg request X (and Context)?”</em>
+              Catalog Setup names the mode; the Inspector <strong>proves fitness</strong> of a concrete Car for that request.
+              Also called a <em>clearance check</em> in ops prose.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Booking</strong></td>
+            <td>One end-to-end reservation: ordered legs, bound Cars, route hops, context, sticky snapshot.</td>
+          </tr>
+          <tr>
+            <td><strong>Leg</strong></td>
+            <td>One line on a Booking: required <code>(Class, Setup)</code> plus any Class-specific request fields the Inspector understands. Fulfilling a leg usually adds one Car to the consist.</td>
+          </tr>
+          <tr>
+            <td><strong>Consist</strong></td>
+            <td>The train so far — ordered Cars already claimed for this Booking. Length grows: 1 → 2 → 3 …</td>
+          </tr>
+          <tr>
+            <td><strong>Context</strong></td>
+            <td>
+              Accumulated facts that later <strong>Inspectors</strong> (and path rules) consume.
+              Sources are not only bound Class Cars — <strong>Yards (and other path devices) can publish facts when visited</strong>
+              (e.g. a clearance stamp from Yard 2). Missing path-context can force detours/loopbacks even when a shorter cable to the next Car exists.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Yard</strong></td>
+            <td>Junction with numbered <strong>in / out tracks</strong> and a legal in→out map (not always full N×M).</td>
+          </tr>
+          <tr>
+            <td><strong>Track / port</strong></td>
+            <td>Attachment point: <code>(device, in|out, track_id)</code>.</td>
+          </tr>
+          <tr>
+            <td><strong>Hop</strong></td>
+            <td>One visit: <code>in:device:out</code> (enter on track <em>in</em>, leave on track <em>out</em>).</td>
+          </tr>
+          <tr>
+            <td><strong>Route</strong></td>
+            <td>Ordered hop list realizing couplings for the Booking.</td>
+          </tr>
+          <tr>
+            <td><strong>Cable</strong></td>
+            <td>External edge from one device’s out track to another’s in track.</td>
+          </tr>
+          <tr>
+            <td><strong>Checkpoint</strong></td>
+            <td>Class policy: once a Car of that Class is claimed, other Cars of that Class are not tried (class-once).</td>
+          </tr>
+          <tr>
+            <td><strong>Assembler</strong></td>
+            <td>Outer engine: walks legs, picks Cars, holds context, calls Coupler, checkpoints, sticky, failures.</td>
+          </tr>
+          <tr>
+            <td><strong>Coupler</strong></td>
+            <td>Inner engine: bounded multi-sink BFS/A* on the port graph through Yards for one coupling segment.</td>
+          </tr>
+          <tr>
+            <td><strong>Oracle</strong></td>
+            <td>Precomputed reachability / distances on ports for fail-fast and A* heuristics.</td>
+          </tr>
+          <tr>
+            <td><strong>Fingerprint / hopeful token</strong></td>
+            <td>Version of world inputs so we can reuse SAT/UNSAT without re-search when nothing relevant changed.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Setup vs Inspector</h3>
+      <table>
+        <thead><tr><th></th><th>Setup</th><th>Inspector</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>What</strong></td>
+            <td>Named mode / configuration a Class can be in</td>
+            <td>Per-Class implementation: does Car + live config satisfy <em>this</em> request?</td>
+          </tr>
+          <tr>
+            <td><strong>Shape</strong></td>
+            <td>Data (catalog of modes)</td>
+            <td>Code / rules unique to the Class</td>
+          </tr>
+          <tr>
+            <td><strong>Example</strong></td>
+            <td><code>4N-cabinets</code>, <code>2-seats</code></td>
+            <td>“RefrigeratedInspector: request wants 4N and band L; Car R-17 is 4N but band M → reject”</td>
+          </tr>
+          <tr>
+            <td><strong>When run</strong></td>
+            <td>Referenced on the leg; cost of changing Setup is ranked later</td>
+            <td>On each candidate Car during Assembler candidate build</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Yard type sketches</h3>
+      <div class="two-col">
+        <div class="mini-card">
+          <h4>Direct</h4>
+          <p><code>in k → out k</code> only. No re-addressing inside the box.</p>
+        </div>
+        <div class="mini-card">
+          <h4>Aggregator</h4>
+          <p>Many ins → one <code>Ag</code> out (<code>1→Ag, 2→Ag, …</code>).</p>
+        </div>
+        <div class="mini-card">
+          <h4>Expander</h4>
+          <p>One <code>Ag</code> in → many outs (<code>Ag→1, Ag→2, …</code>).</p>
+        </div>
+        <div class="mini-card">
+          <h4>Restricted / full matrix</h4>
+          <p>Sparse or dense legal crosspoints; full N×M is the extreme.</p>
+        </div>
+      </div>
+
+      <!-- ========== BIG PICTURE ========== -->
+      <h2 id="big-picture">Big picture</h2>
+      <p>
+        A Booking is not “visit places on a map.” It is <strong>assembling a longer train</strong>:
+        each leg claims a Car of the required Class/Setup, optionally through Yards,
+        and publishes facts that constrain the next leg.
+      </p>
+
+      <div class="mermaid">
+flowchart TB
+  subgraph booking["Booking request"]
+    L1["Leg1: Class Refrigerated · Setup 4N"]
+    L2["Leg2: Class Normal · Setup 2 seats"]
+    L3["Leg3: Class Docking · Setup 1 connector"]
+    L1 --> L2 --> L3
+  end
+
+  subgraph outer["Assembler — outer"]
+    P1["Pick Car · update Context · Checkpoint?"]
+    P2["Pick Car · update Context · Checkpoint?"]
+    P3["Pick Car · done"]
+  end
+
+  subgraph inner["Coupler — inner A*/BFS"]
+    C1["Ports through Yards"]
+    C2["Ports through Yards"]
+  end
+
+  L1 --> P1
+  P1 --> C1
+  C1 --> P2
+  P2 --> C2
+  C2 --> P3
+      </div>
+
+      <div class="svg-wrap" aria-hidden="true">
+        <svg class="diagram" viewBox="0 0 860 200" xmlns="http://www.w3.org/2000/svg">
+          <text x="20" y="28" fill="#8b9bb4" font-size="12" font-family="system-ui,sans-serif" font-weight="600">CONSIST GROWS</text>
+          <!-- step1 -->
+          <rect x="20" y="50" width="70" height="36" rx="6" fill="rgba(91,159,212,0.2)" stroke="#5b9fd4" stroke-width="2"/>
+          <text x="55" y="73" text-anchor="middle" fill="#5b9fd4" font-size="12" font-family="ui-monospace,monospace">R-17</text>
+          <text x="55" y="110" text-anchor="middle" fill="#5c6b82" font-size="11" font-family="system-ui,sans-serif">after leg 1</text>
+          <!-- arrow -->
+          <path d="M100 68 H130" stroke="#5c6b82" stroke-width="2" marker-end="url(#a)"/>
+          <!-- step2 -->
+          <rect x="140" y="50" width="70" height="36" rx="6" fill="rgba(91,159,212,0.2)" stroke="#5b9fd4" stroke-width="2"/>
+          <text x="175" y="73" text-anchor="middle" fill="#5b9fd4" font-size="12" font-family="ui-monospace,monospace">R-17</text>
+          <rect x="220" y="50" width="70" height="36" rx="6" fill="rgba(107,207,142,0.2)" stroke="#6bcf8e" stroke-width="2"/>
+          <text x="255" y="73" text-anchor="middle" fill="#6bcf8e" font-size="12" font-family="ui-monospace,monospace">N-04</text>
+          <text x="215" y="110" text-anchor="middle" fill="#5c6b82" font-size="11" font-family="system-ui,sans-serif">after leg 2 · context cabinets=4</text>
+          <path d="M300 68 H330" stroke="#5c6b82" stroke-width="2"/>
+          <!-- step3 -->
+          <rect x="340" y="50" width="70" height="36" rx="6" fill="rgba(91,159,212,0.2)" stroke="#5b9fd4" stroke-width="2"/>
+          <text x="375" y="73" text-anchor="middle" fill="#5b9fd4" font-size="12" font-family="ui-monospace,monospace">R-17</text>
+          <rect x="420" y="50" width="70" height="36" rx="6" fill="rgba(107,207,142,0.2)" stroke="#6bcf8e" stroke-width="2"/>
+          <text x="455" y="73" text-anchor="middle" fill="#6bcf8e" font-size="12" font-family="ui-monospace,monospace">N-04</text>
+          <rect x="500" y="50" width="70" height="36" rx="6" fill="rgba(224,180,74,0.2)" stroke="#e0b44a" stroke-width="2"/>
+          <text x="535" y="73" text-anchor="middle" fill="#e0b44a" font-size="12" font-family="ui-monospace,monospace">D-02</text>
+          <text x="455" y="110" text-anchor="middle" fill="#5c6b82" font-size="11" font-family="system-ui,sans-serif">full Booking consist</text>
+          <!-- yards note -->
+          <rect x="620" y="40" width="220" height="100" rx="10" fill="#1c2736" stroke="#ff8c69" stroke-width="1.5"/>
+          <text x="730" y="70" text-anchor="middle" fill="#ff8c69" font-size="12" font-weight="700" font-family="system-ui,sans-serif">Yards sit between</text>
+          <text x="730" y="92" text-anchor="middle" fill="#8b9bb4" font-size="11" font-family="system-ui,sans-serif">Coupler finds hop lists</text>
+          <text x="730" y="112" text-anchor="middle" fill="#8b9bb4" font-size="11" font-family="system-ui,sans-serif">Assembler picks Cars</text>
+        </svg>
+      </div>
+
+      <!-- ========== WALKTHROUGH ========== -->
+      <h2 id="walkthrough">Interactive walkthroughs</h2>
+      <p>
+        Choose a scenario below, then step with
+        <strong>Back / Forward</strong>.
+        Keyboard: <span class="kbd">←</span>/<span class="kbd">→</span> or
+        <span class="kbd">h</span>/<span class="kbd">l</span> or
+        <span class="kbd">[</span>/<span class="kbd">]</span>
+        (works while scrolling the fabric — no need to focus the panel).
+        Controls also stay <strong>sticky</strong> at the top of the walk and as a
+        <strong>floating bar</strong> bottom-right.
+      </p>
+
+      <!-- Scenario picker lives here AND is mirrored at top of walk panel -->
+      <div class="scenario-picker" id="scenarioPickerTop">
+        <div class="picker-label">Interactive scenarios (pick one)</div>
+        <div class="scenario-select-row">
+          <label for="scenarioSelect">Scenario</label>
+          <select id="scenarioSelect" aria-label="Choose walkthrough scenario"></select>
+        </div>
+        <div class="scenario-tabs" id="scenarioTabs" role="tablist" aria-label="Walkthrough scenarios"></div>
+        <p class="scenario-blurb" id="scenarioBlurb"></p>
+      </div>
+
+      <!-- Always-visible toy world graph with cables -->
+      <div class="topo-map" id="topoMap" aria-label="Toy topology graph">
+        <h3>Toy world — full topology (shared by all scenarios)</h3>
+        <p class="topo-intro">
+          This is the <strong>wired fabric</strong>, not just a list.
+          Rectangles = devices; lines = cables.
+          <code>R-*</code>/<code>N-*</code>/<code>D-*</code> = <strong>Cars</strong> (Class instances).
+          <code>Y1</code>/<code>Y2</code> = <strong>Yards</strong> (junctions).
+          As you step a scenario, edges light up for the active path (cyan = current, green = already taken, red dashed = blocked/rejected).
+        </p>
+        <div class="topo-graph-wrap">
+          <div id="topoGraph" role="img" aria-label="Toy topology graph (Cytoscape.js)"></div>
+          <div class="topo-graph-hint">scroll to zoom · drag background to pan · click a node</div>
+        </div>
+        <div class="topo-legend-row">
+          <span><i style="background:#4a5d78"></i> idle cable</span>
+          <span><i style="background:#7dd3fc"></i> active hop</span>
+          <span><i style="background:#34d399"></i> used on path</span>
+          <span><i style="background:#f87171;height:0;border-top:2px dashed #f87171;width:18px"></i> blocked / rejected</span>
+          <span style="color:#5b9fd4">● Refrigerated Car</span>
+          <span style="color:#6bcf8e">● Normal Car</span>
+          <span style="color:#e0b44a">● Docking Car</span>
+          <span style="color:#ff8c69">● Yard</span>
+        </div>
+        <div class="topo-booking" id="topoNodeInfo">
+          <strong>Paths on this graph:</strong>
+          Simple <code>R→Y1→N→D</code> ·
+          Multi <code>R→Y1→Y2→N-04</code> · Loopback <code>…→Y2→Y1in5→out6→N-12</code> ·
+          Same wiring for prefilter / no-solution / sticky.
+          Built with <strong>Cytoscape.js</strong> (2D graph lib — better fit than D3 for fixed topology + path highlight, lighter than three.js).
+        </div>
+      </div>
+
+      <div class="walk" id="walk" tabindex="0" aria-live="polite">
+        <div class="walk-sticky-nav" id="walkStickyNav">
+          <div class="sticky-meta">
+            <strong id="stickyTitle">Walkthrough</strong>
+            <span id="stickyCounter">Step —</span>
+          </div>
+          <div class="walk-controls">
+            <button type="button" id="btnPrev" aria-label="Previous step">← Back</button>
+            <button type="button" id="btnNext" class="primary" aria-label="Next step">Forward →</button>
+            <button type="button" id="btnReset" aria-label="Reset">Reset</button>
+          </div>
+          <div class="sticky-keys">Keys: ← → · h l · [ ] · while not typing in an input</div>
+        </div>
+        <div class="scenario-picker" style="margin-bottom:1rem">
+          <div class="picker-label">Same scenarios (always visible while stepping)</div>
+          <div class="scenario-tabs" id="scenarioTabsWalk" role="tablist" aria-label="Walkthrough scenarios (walk panel)"></div>
+        </div>
+        <div class="walk-header">
+          <div>
+            <h3 id="walkTitle">Walkthrough</h3>
+            <div class="step-counter" id="stepCounter"></div>
+          </div>
+        </div>
+        <div class="legs-row" id="legsRow"></div>
+        <div class="dots" id="dots" aria-hidden="true"></div>
+        <div id="phasePill" class="phase-pill assembler">Assembler</div>
+        <div class="step-meta" id="stepMeta"></div>
+        <div class="step-title" id="stepTitle"></div>
+        <p class="step-body" id="stepBody"></p>
+        <div class="viz-grid">
+          <div class="viz-card" style="grid-column:1/-1;font-size:0.82rem;color:var(--muted)">
+            <strong style="color:var(--text)">How to read panels:</strong>
+            <span style="color:var(--class-a)"><strong>prefilter</strong></span> = cheap Assembler screen (path-independent; e.g. seats &gt; 5).
+            <span style="color:var(--yard)"><strong>accept</strong></span> = full Inspector at Coupler goal (path Context + track routing, e.g. can run track 1→2).
+            <strong>One Coupler/A* call</strong> = whole segment tail→next Class (Yards inside). Assembler does not step Yards.
+          </div>
+          <div class="viz-card">
+            <h4>Consist (Assembler state)</h4>
+            <div class="consist" id="vizConsist"></div>
+            <div class="consist-legend" id="consistLegend">
+              Bound Class Cars + Yards already committed on the Booking route. Mid-A*, Yards may appear as “expanding” before N/D is bound.
+            </div>
+          </div>
+          <div class="viz-card">
+            <h4>Context</h4>
+            <div class="ctx" id="vizCtx"></div>
+          </div>
+          <div class="viz-card">
+            <h4>Cars · prefilter vs accept</h4>
+            <div id="candLegHint" style="font-size:0.78rem;color:var(--muted);margin-bottom:0.45rem"></div>
+            <div class="cand-list" id="vizCands"></div>
+          </div>
+          <div class="viz-card">
+            <h4>A* path so far (this Coupler call)</h4>
+            <div class="path-hops" id="vizHops"></div>
+          </div>
+          <div class="viz-card fabric-card" style="grid-column: 1 / -1">
+            <div class="fabric-card-head">
+              <h4>Fabric at track level · hop = in:Device:out</h4>
+              <div class="walk-controls fabric-inline-nav" aria-label="Step while viewing fabric">
+                <button type="button" id="btnPrevFabric" aria-label="Previous step">←</button>
+                <button type="button" id="btnNextFabric" class="primary" aria-label="Next step">→</button>
+              </div>
+            </div>
+            <p style="font-size:0.78rem;color:var(--muted);margin:0 0 0.5rem;max-width:none">
+              Yards show <strong>IN tracks</strong> (left) and <strong>OUT tracks</strong> (right).
+              One cable per out track (no multiplex).
+              <code>1:Y1:1</code>→N-04 · <code>1:Y1:2</code>→Y2 · <code>1:Y1:3</code>→N-08 ·
+              <code>5:Y1:6</code>→N-12 (re-entry only; illegal 1→6).
+              Y2 out5→N-04 · Y2 out6→Y1 in5 (loopback).
+              Step with the buttons here, the floating bar, or <span class="kbd">←</span>/<span class="kbd">→</span>.
+            </p>
+            <svg class="fabric-svg" id="fabricSvg" viewBox="0 0 960 390" xmlns="http://www.w3.org/2000/svg" aria-label="Port-level fabric diagram"></svg>
+          </div>
+          <div class="viz-card" style="grid-column: 1 / -1">
+            <h4>Notes</h4>
+            <div id="vizNotes" style="font-size:0.88rem;color:var(--muted)"></div>
+            <div id="vizFailure" class="failure-box" style="display:none;margin-top:0.65rem"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Fixed prev/next while viewing fabric or topology (JS wires ids) -->
+      <div class="walk-float-nav" id="walkFloatNav" hidden>
+        <div class="walk-controls">
+          <button type="button" id="btnPrevFloat" aria-label="Previous step">← Back</button>
+          <button type="button" id="btnNextFloat" class="primary" aria-label="Next step">Forward →</button>
+          <button type="button" id="btnResetFloat" aria-label="Reset walkthrough">Reset</button>
+        </div>
+        <div class="float-hint">← → · h l · [ ] · Home = reset</div>
+      </div>
+
+      <!-- ========== LAYERS ========== -->
+      <h2 id="layers">Outer vs inner</h2>
+      <div class="two-col">
+        <div class="panel">
+          <h3><span class="layer-tag outer">Outer</span> Assembler</h3>
+          <p style="margin:0;max-width:none;font-size:0.9rem;color:var(--muted)">
+            Walk legs in order. For each Class, run that Class’s cheap
+            <strong>prefilter</strong> (mini-inspector) to build Coupler goals.
+            Rank, call Coupler; full <strong>accept()</strong> runs at goal arrival.
+            Bind Car, merge facts, checkpoint, sticky/fail.
+          </p>
+        </div>
+        <div class="panel">
+          <h3><span class="layer-tag inner">Inner</span> Coupler</h3>
+          <p style="margin:0;max-width:none;font-size:0.9rem;color:var(--muted)">
+            One segment: start = consist <strong>tail port</strong>,
+            goals = candidate head ports. Bounded multi-sink BFS/A* on the
+            <strong>port graph</strong> (cables + legal Yard in→out).
+          </p>
+        </div>
+      </div>
+
+      <div class="callout ok">
+        <strong>Contract:</strong> Assembler runs Class legs and Booking state.
+        Coupler finds <em>one successful path between two Classes</em> (any number of Yards in the middle) —
+        <strong>early return on success</strong>, or <strong>fail when search is exhausted</strong>.
+        Assembler does <em>not</em> get a callback after every failed path try.
+      </div>
+
+      <table>
+        <thead>
+          <tr><th></th><th>Assembler</th><th>Coupler (A*/BFS)</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Main use</strong></td>
+            <td>Class leg order, candidate Cars, Context, checkpoints, sticky, whole-Booking fail</td>
+            <td>Fabric path from <em>tail Car</em> to <em>some next-Class Car</em></td>
+          </tr>
+          <tr>
+            <td><strong>How often they talk</strong></td>
+            <td>Once per Class→Class segment (after first Car)</td>
+            <td>Many expansions <em>inside</em> one call; <strong>one</strong> return to Assembler</td>
+          </tr>
+          <tr>
+            <td><strong>Success</strong></td>
+            <td>Bind car, append <em>full</em> hop list from Coupler</td>
+            <td>Early return: path + car when goal port + Inspector OK</td>
+          </tr>
+          <tr>
+            <td><strong>Failure</strong></td>
+            <td>Booking UNSAT at this leg</td>
+            <td>Open set empty / budget — no acceptable path</td>
+          </tr>
+          <tr>
+            <td><strong>Yards</strong></td>
+            <td>Never steps Yards as legs</td>
+            <td>0..many Yard hops between the two Classes (any types)</td>
+          </tr>
+          <tr>
+            <td><strong>Wrong</strong></td>
+            <td colspan="2">A* returns R→Y1→N4 → Assembler Inspector-fails → Assembler starts a <em>new</em> A* for R→Y2→N4</td>
+          </tr>
+          <tr>
+            <td><strong>Right</strong></td>
+            <td colspan="2">Short-path fail, other N tries, Y2 discovery all happen <em>inside one</em> couple(); Assembler only sees final success or total fail</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <pre>// Assembler control flow
+for each Class leg:
+  candidates = Inspector-filter + rank
+  if first leg:
+    bind Car only (no Coupler)
+  else:
+    result = Coupler.couple(tail → candidates, context)  // BLOCKED until done
+    // inside Coupler: try short paths, fail Inspector, expand Y2, …
+    if fail: Booking UNSAT
+    bind result.car; route += result.hops; context = result.context
+
+
+// Coupler — one segment only
+couple(start_ports, goal_cars, context):
+  multi-sink A*/BFS on port graph
+  on reach goal Car:
+    if Inspector.accept(..., path_context): return success  // early
+    else: discard, continue
+  if exhausted/budget: return failure
+</pre>
+
+      <div class="callout">
+        <strong>A → Z with only Yards between?</strong> Still <em>one</em> Coupler call.
+        Path may be <code>A-car → Y₁ → … → Y₁₂ → Z-car</code>.
+        Twelve yard types = edge rules on the fabric, not twelve Assembler steps.
+        Full picture + open questions: <code>docs/SPEC.md</code>.
+        Implementer contracts: <code>docs/BUILD_SPEC.md</code> §8.0.
+      </div>
+
+      <!-- ========== ASSEMBLER ========== -->
+      <h2 id="assembler">Assembler (deep dive)</h2>
+      <p>
+        The Assembler’s <strong>main use</strong> is to turn a multi-Class Booking into a sequence of
+        “pick next Car + connect from previous,” using Coupler as the fabric engine for each segment.
+        It does not expand every Yard track. It holds consist, Context, checkpoints, and sticky/fail.
+      </p>
+
+      <h3>What it stores between legs</h3>
+      <table>
+        <thead><tr><th>Memory</th><th>Feeds into</th></tr></thead>
+        <tbody>
+          <tr><td>Consist (Cars bound)</td><td>Answer + sticky replay</td></tr>
+          <tr><td>Context facts</td><td>Filter next candidates <em>before</em> A*</td></tr>
+          <tr><td>Tail port of last Car</td><td><strong>Start</strong> of next Coupler run</td></tr>
+          <tr><td>Route hops so far</td><td>Full Booking route</td></tr>
+          <tr><td>Checkpoints (closed Classes)</td><td>Cull other Cars of that Class</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Why outer is serial</h3>
+      <p>
+        Later eligibility depends on earlier binds (context). You cannot
+        freely assign all Classes in parallel and join paths afterward.
+        Parallelism is fine <em>inside</em> a leg (filter/rank) or inside Coupler
+        precompute — not across legs as independent solves.
+      </p>
+
+      <h3>Checkpointed Classes</h3>
+      <p>
+        When a Class is checkpointed (class-once), claiming a Car freezes that Class
+        for the Booking. Failures <strong>after</strong> that leg are reported as
+        conditional on the lock:
+      </p>
+      <div class="callout warn">
+        “Failed at Docking <strong>under checkpoint Refrigerated = R-17</strong>.
+        Other Refrigerated Cars were not considered.”
+      </div>
+
+      <!-- ========== ASTAR ========== -->
+      <h2 id="astar">Coupler — multi-sink bounded A* / BFS</h2>
+      <p>
+        Each coupling segment is a normal shortest-path problem on
+        <strong>ports</strong>, not on Class labels.
+      </p>
+
+      <pre>// One leg's fabric search
+starts = tail ports of consist (e.g. last Car's outs)
+goals  = head ports of ranked candidate Cars for this Class
+
+search = BFS if unit hop cost
+       = A*  if weighted cost + heuristic from Oracle
+
+until hit any goal OR budget exhausted:
+  expand via cables and legal Yard (in→out) pairs
+  prune: repeat hop_key, hop budget H, visits/yard V, max expansions</pre>
+
+      <h3>Why multi-sink (not one A* per Car)</h3>
+      <p>
+        One search from the tail toward <em>all</em> candidate ports explores the
+        Yard fabric once. Prefer that over N independent A* runs that re-walk
+        the same corridors.
+      </p>
+
+      <h3>Two reasons for multi-Yard loopbacks</h3>
+      <table>
+        <thead><tr><th>Cause</th><th>What forces the detour</th><th>Example</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Track / map</strong></td>
+            <td>Legal in→out pairs (or cables) do not allow the short hop</td>
+            <td>Yard1 forbids <code>1→6</code>; only <code>5→6</code> reaches the cable to the next Car</td>
+          </tr>
+          <tr>
+            <td><strong>Context / Inspector</strong></td>
+            <td>Short cable <em>exists</em>, but next Class Inspector fails without facts gained only by visiting another Yard (or device) first</td>
+            <td>Yard1→Kind D is wired, but DockingInspector needs a stamp from Yard2 → path must hit Y2, loop back, then Kind D</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Both can combine on one Booking. Coupler state may need more than ports:
+        <strong>port + partial Context acquired along the path</strong> (or mandatory waypoints derived from “what facts does this leg still need?”).
+      </p>
+
+      <h3 id="anti-loop">Useful re-entry vs infinite loopback</h3>
+      <p>
+        Walkthrough <a href="?scenario=loopback"><strong>3 · Loopback</strong></a> shows a
+        <em>good</em> re-entry: <code>1:Y1:2</code> then later <code>5:Y1:6</code>
+        (different <code>hop_key</code>) after Y2→N-04 is closed.
+        The same fabric can thrash forever if Coupler keeps expanding
+        <code>Y1↔Y2</code> on <em>already used</em> ports with no new facts.
+      </p>
+      <div class="callout">
+        <strong>Rule of thumb:</strong> re-visit a Yard only when the
+        <code>hop_key = (device, in, out)</code> is new <em>or</em> path Context improved.
+        Same hop_key again = spin → prune. Still over-visit? Hard caps → <code>BUDGET</code>.
+      </div>
+      <table>
+        <thead><tr><th>Guard (DEFAULT v1)</th><th>Allows useful re-entry?</th><th>Stops infinite loopback?</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>No repeat hop_key</strong> on path</td>
+            <td>Yes — <code>1:Y1:2</code> then <code>5:Y1:6</code> OK</td>
+            <td>Yes — cannot expand the same in→out again</td>
+          </tr>
+          <tr>
+            <td><strong>max_visits_per_yard V</strong> (default 3)</td>
+            <td>Yes if within V</td>
+            <td>Yes — even with many distinct hop_keys</td>
+          </tr>
+          <tr>
+            <td><strong>max_hops H</strong> (default 16)</td>
+            <td>Short detours OK</td>
+            <td>Yes — path length wall</td>
+          </tr>
+          <tr>
+            <td><strong>max_expansions</strong> + <strong>max_wall_ms</strong></td>
+            <td>—</td>
+            <td>Yes — mesh thrash → finite <code>BUDGET</code>, never hang</td>
+          </tr>
+          <tr>
+            <td>Optional no immediate cable backtrack</td>
+            <td>Usually</td>
+            <td>Culls trivial A→B→A edges</td>
+          </tr>
+          <tr>
+            <td>Closed set <code>(port, context_fp)</code></td>
+            <td>Yes — stamp later can reopen goal logic</td>
+            <td>Avoids re-expanding same state</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Golden <strong>G1</strong> = restricted re-entry succeeds (two Y1 hop_keys).
+        Golden <strong>G2</strong> = caps prevent infinite y1↔y2 (finite UNSAT / BUDGET).
+        Spec: BUILD_SPEC policy + Coupler prune; SPEC hop_key anti-loop.
+      </p>
+
+      <h3>Restricted Yard forces detour (example)</h3>
+      <div class="svg-wrap">
+        <svg class="diagram" viewBox="0 0 780 290" xmlns="http://www.w3.org/2000/svg">
+          <text x="20" y="24" fill="#8b9bb4" font-size="12" font-family="system-ui,sans-serif">Need out 6 for next Car · in 1 cannot cross to out 6 inside Yard 1</text>
+          <!-- Y1 -->
+          <rect x="80" y="50" width="200" height="180" rx="12" fill="#2a1f1a" stroke="#ff8c69" stroke-width="2"/>
+          <text x="180" y="78" text-anchor="middle" fill="#ff8c69" font-size="14" font-weight="700" font-family="system-ui,sans-serif">Yard 1</text>
+          <text x="100" y="110" fill="#94a3b8" font-size="10" font-family="system-ui,sans-serif">IN</text>
+          <rect x="100" y="120" width="32" height="24" rx="4" fill="#121a24" stroke="#7dd3fc" stroke-width="2"/>
+          <text x="116" y="137" text-anchor="middle" fill="#7dd3fc" font-size="12" font-family="monospace">1</text>
+          <rect x="100" y="170" width="32" height="24" rx="4" fill="#121a24" stroke="#7dd3fc" stroke-width="2"/>
+          <text x="116" y="187" text-anchor="middle" fill="#7dd3fc" font-size="12" font-family="monospace">5</text>
+          <text x="220" y="110" fill="#94a3b8" font-size="10" font-family="system-ui,sans-serif">OUT</text>
+          <rect x="230" y="120" width="32" height="24" rx="4" fill="#121a24" stroke="#7dd3fc" stroke-width="2"/>
+          <text x="246" y="137" text-anchor="middle" fill="#7dd3fc" font-size="12" font-family="monospace">1</text>
+          <rect x="230" y="170" width="32" height="24" rx="4" fill="#121a24" stroke="#7dd3fc" stroke-width="2"/>
+          <text x="246" y="187" text-anchor="middle" fill="#7dd3fc" font-size="12" font-family="monospace">6</text>
+          <path d="M132 132 H230" stroke="#7dd3fc" stroke-width="2.5"/>
+          <text x="180" y="124" text-anchor="middle" fill="#7dd3fc" font-size="9" font-family="system-ui,sans-serif">1→1 ok</text>
+          <path d="M132 132 L230 182" stroke="#f87171" stroke-width="2" stroke-dasharray="4 3"/>
+          <text x="165" y="165" fill="#f87171" font-size="9" font-family="system-ui,sans-serif">1→6 no</text>
+          <!-- internal 5→6: leaves right of IN 5, enters left of OUT 6 (not through IN 5 from the left) -->
+          <path d="M132 182 H230" stroke="#7dd3fc" stroke-width="2.5" stroke-linecap="round"/>
+          <text x="180" y="210" text-anchor="middle" fill="#7dd3fc" font-size="9" font-family="system-ui,sans-serif">5→6 ok (2nd visit)</text>
+          <!-- Y2 -->
+          <rect x="380" y="80" width="140" height="100" rx="12" fill="#2a1f1a" stroke="#ff8c69" stroke-width="2"/>
+          <text x="450" y="125" text-anchor="middle" fill="#ff8c69" font-size="13" font-weight="700" font-family="system-ui,sans-serif">Yard 2</text>
+          <text x="450" y="145" text-anchor="middle" fill="#8b9bb4" font-size="10" font-family="system-ui,sans-serif">1→5 rearrange</text>
+          <!-- Y1 out1 → Y2 in -->
+          <path d="M262 132 H380" stroke="#7dd3fc" stroke-width="2.5"/>
+          <!-- Y2 out → left edge of Y1 IN 5 only (stops there; does not run through the box) -->
+          <path d="M520 150 C 600 150, 640 210, 500 235 C 300 255, 140 230, 100 182"
+                stroke="#7dd3fc" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+          <circle cx="100" cy="182" r="3.5" fill="#7dd3fc"/>
+          <text x="300" y="268" text-anchor="middle" fill="#7dd3fc" font-size="11" font-family="system-ui,sans-serif">loopback cable → Y1 <tspan font-weight="700">IN 5</tspan> (then internal 5→6 from right of box)</text>
+          <text x="40" y="248" fill="#8b9bb4" font-size="12" font-family="ui-monospace,monospace">1:y1:1 → 1:y2:5 → 5:y1:6 → …</text>
+        </svg>
+      </div>
+
+      <!-- ========== YARDS ========== -->
+      <h2 id="yards">Yards, tracks, hop syntax</h2>
+      <p>
+        Graph nodes for Coupler are <strong>ports</strong>, not whole devices.
+        Edges are (1) cables out→in and (2) legal internal pairs inside a Yard.
+      </p>
+      <pre>hop syntax:  in : device : out
+example:     5 : yard1 : 6     // enter yard1 on 5, leave on 6</pre>
+      <p>
+        Direct Yards only allow matching numbers. Aggregators / expanders
+        introduce shared <code>Ag</code> ports with their own capacity rules
+        (mutex vs combine — product policy).
+      </p>
+
+      <!-- ========== HEURISTICS ========== -->
+      <h2 id="heuristics">Heuristics we rely on</h2>
+      <table>
+        <thead><tr><th>Heuristic</th><th>Layer</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Checkpoint / class-once</strong></td>
+            <td>Assembler</td>
+            <td>After claim, drop other Cars of that Class. Sub-optimal by design; huge cull.</td>
+          </tr>
+          <tr>
+            <td><strong>First-fit on stable order</strong></td>
+            <td>Assembler</td>
+            <td>Deterministic; sticky id first; no full optimality.</td>
+          </tr>
+          <tr>
+            <td><strong>Piggyback Setup</strong></td>
+            <td>Assembler rank</td>
+            <td>Prefer Cars already in required Setup (reconfig is expensive).</td>
+          </tr>
+          <tr>
+            <td><strong>Sticky snapshot</strong></td>
+            <td>Resolve entry</td>
+            <td>Same Booking + valid world → same Cars/route; skip search.</td>
+          </tr>
+          <tr>
+            <td><strong>Context filters</strong></td>
+            <td>Assembler</td>
+            <td>Facts from earlier Cars shrink next candidate sets before A*.</td>
+          </tr>
+          <tr>
+            <td><strong>Multi-sink couple</strong></td>
+            <td>Coupler</td>
+            <td>One fabric search per leg toward all candidates.</td>
+          </tr>
+          <tr>
+            <td><strong>Oracle reachability</strong></td>
+            <td>Before Coupler</td>
+            <td>Drop geometrically impossible goals within H (optimistic vs capacity).</td>
+          </tr>
+          <tr>
+            <td><strong>Hop / visit / expansion budgets</strong></td>
+            <td>Coupler</td>
+            <td>Hard cap mesh thrash; may yield BUDGET failures.</td>
+          </tr>
+          <tr>
+            <td><strong>No repeat hop_key</strong></td>
+            <td>Coupler</td>
+            <td>Kill y1↔y2 livelock; keep legal re-entry on new tracks.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- ========== PERFORMANCE ========== -->
+      <h2 id="performance">Performance</h2>
+      <p>
+        Dominant cost is almost always:
+      </p>
+      <pre>time ≈ Σ_legs ( candidates_tried × cost(couple_search) )</pre>
+      <p>Drive both factors down.</p>
+
+      <h3>Hot path</h3>
+      <ol>
+        <li><strong>Sticky hit</strong> → return snapshot (fastest).</li>
+        <li>Per leg: index by Class/Setup → context filter → rank → oracle prune.</li>
+        <li><strong>One</strong> multi-sink bounded A*/BFS (not one search per Car).</li>
+        <li>Hard caps: <code>H</code>, <code>V</code>, <code>max_expansions</code>, wall clock.</li>
+      </ol>
+
+      <h3>Data structures (Coupler hot loop)</h3>
+      <ul>
+        <li>Integer port ids; CSR adjacency for cables + Yard maps.</li>
+        <li>Sparse internal maps (only legal pairs).</li>
+        <li>Visited on port (and visit count if V&gt;1).</li>
+        <li>No string labels inside expand.</li>
+      </ul>
+
+      <h3>Complexity intent</h3>
+      <table>
+        <thead><tr><th>Mode</th><th>Couple searches</th><th>Quality</th></tr></thead>
+        <tbody>
+          <tr><td>Sticky hit</td><td>0</td><td>Previous</td></tr>
+          <tr><td>First-fit multi-sink / leg</td><td>~1</td><td>Sub-optimal OK</td></tr>
+          <tr><td>Beam / backtrack reopen checkpoint</td><td>multiplies</td><td>Higher success</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout">
+        Performance is an <strong>SLA + caps</strong> contract, not “run until optimal.”
+        Measure sticky hit rate, candidates entering Coupler, expansions/leg, oracle reject rate.
+      </div>
+
+      <!-- ========== EXPLOSION ========== -->
+      <h2 id="explosion">Graph explosion — more levers</h2>
+      <p>
+        Yards are N:M and Yard–Yard meshes can explode. Beyond the heuristics above:
+      </p>
+
+      <h3>Discussed</h3>
+      <ul>
+        <li>Port-level state + hop_key anti-loop</li>
+        <li>H / V / max expansions</li>
+        <li>Oracle + A* heuristic distances</li>
+        <li>Multi-sink; checkpoint; context prune</li>
+        <li>Negative cache so failed Bookings do not rescan when nothing hopeful changed</li>
+      </ul>
+
+      <h3>Additional ideas (not fully designed yet)</h3>
+      <table>
+        <thead><tr><th>Technique</th><th>Idea</th><th>Tradeoff</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Yard clustering / contraction</strong></td>
+            <td>Collapse dense Yard regions to boundary ports; precompute boundary→boundary costs; expand interior only when entered.</td>
+            <td>Build complexity; rebuild on topology change.</td>
+          </tr>
+          <tr>
+            <td><strong>Landmark / ALT heuristics</strong></td>
+            <td>Stronger A* h than plain BFS layers; fewer expansions.</td>
+            <td>Precompute memory.</td>
+          </tr>
+          <tr>
+            <td><strong>Bidirectional multi-sink</strong></td>
+            <td>Forward from tail + multi-source backward from goals; meet in middle (fabric only).</td>
+            <td>Implementation care; still one leg.</td>
+          </tr>
+          <tr>
+            <td><strong>Corridor / template routes</strong></td>
+            <td>For common Class pairs, preferred Yard corridors; search deviation only on miss.</td>
+            <td>Ops knowledge; maintenance.</td>
+          </tr>
+          <tr>
+            <td><strong>Hierarchical planning</strong></td>
+            <td>Region-level path first, then port refine.</td>
+            <td>Two-level correctness.</td>
+          </tr>
+          <tr>
+            <td><strong>Incremental Oracle</strong></td>
+            <td>Update reachability only for affected components on topology edit.</td>
+            <td>Engineering cost.</td>
+          </tr>
+          <tr>
+            <td><strong>Capacity-aware landmarks</strong></td>
+            <td>Coarse “region full” flags to skip hopeless clusters.</td>
+            <td>Can be wrong if too coarse; keep optimistic fail-open carefully.</td>
+          </tr>
+          <tr>
+            <td><strong>Beam on partial consists</strong></td>
+            <td>Keep k partial trains instead of pure first-fit — better success without full meta-A*.</td>
+            <td>k× work.</td>
+          </tr>
+          <tr>
+            <td><strong>Lazy Coupler</strong></td>
+            <td>Only run A* for top-ranked candidates after oracle; or stop at first goal in preference order.</td>
+            <td>Default we want.</td>
+          </tr>
+          <tr>
+            <td><strong>Separate geometry vs occupancy</strong></td>
+            <td>Oracle ignores live claims (optimistic); Coupler applies occupancy — avoids constant oracle rebuild.</td>
+            <td>Some false-positive couple attempts.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="mermaid">
+flowchart LR
+  subgraph reduce_cands["Fewer Cars into Coupler"]
+    I[Class index]
+    X[Context filter]
+    K[Checkpoint closed]
+    O[Oracle reachable?]
+    I --> X --> K --> O
+  end
+  subgraph reduce_mesh["Cheaper fabric search"]
+    M[Multi-sink]
+    A[A* + h]
+    B[Budgets H V exp]
+    L[hop_key anti-loop]
+    CL[Optional cluster]
+    M --> A --> B --> L --> CL
+  end
+  reduce_cands --> reduce_mesh
+  reduce_mesh --> Bind[Bind or fail with reason]
+      </div>
+
+      <!-- ========== FAILURES ========== -->
+      <h2 id="failures">Failure reasons</h2>
+      <p>
+        Do not narrate the A* open set. Fail at the
+        <strong>first pipeline stage that empties options</strong>, and attach a small report.
+      </p>
+
+      <h3>Pipeline (explain at first zero)</h3>
+      <pre>Catalog → Inspector(request, car, context) → Busy → Oracle geometry → Free path → Budget</pre>
+      <p style="font-size:0.9rem;color:var(--muted)">
+        Inspector subsumes “Setup + Class-specific rules + Context consumption.”
+        Prefer one reject reason from the Inspector when possible (structured),
+        not a silent empty list.
+      </p>
+
+      <h3>Stable reason codes</h3>
+      <table>
+        <thead><tr><th>Code</th><th>When</th><th>User-facing gist</th></tr></thead>
+        <tbody>
+          <tr><td><code>NO_CANDIDATES</code></td><td>No Car passes this Class’s Inspector for the request/context</td><td>Nothing fits this leg given earlier locks</td></tr>
+          <tr><td><code>INSPECTOR_REJECT</code></td><td>Optional detail: Inspector returned a typed reason on sampled Cars</td><td>e.g. “Car config incompatible with request X”</td></tr>
+          <tr><td><code>ALL_BUSY</code></td><td>Matches exist, all claimed</td><td>Matching Cars all in use</td></tr>
+          <tr><td><code>UNREACHABLE</code></td><td>Oracle: no geometry within H</td><td>No Yard path to any matching Car</td></tr>
+          <tr><td><code>CAPACITY_BLOCKED</code></td><td>Geometry ok; hops/ports busy</td><td>Paths blocked by other Bookings</td></tr>
+          <tr><td><code>BUDGET</code></td><td>Hit expansion/hop limits</td><td>No path within search limits</td></tr>
+          <tr><td><code>CONTEXT_DEAD_END</code></td><td>Checkpoints make later legs impossible</td><td>Earlier Car choices leave no continuation</td></tr>
+          <tr><td><code>POLICY</code></td><td>Rule forbids combination</td><td>Disallowed by policy</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Failure report shape</h3>
+      <pre>{
+  status: "UNSAT",
+  failed_leg: 3,
+  code: "CAPACITY_BLOCKED",
+  summary: "…",
+  checkpoints: [
+    { leg: 1, class: "Refrigerated", car: "R-17" },
+    { leg: 2, class: "Normal", car: "N-04" }
+  ],
+  counts: {
+    candidates_before_context: 40,
+    after_context: 12,
+    after_busy: 5,
+    oracle_ok: 3
+  },
+  blockers: [ { booking: "B-88", hop: "5:yard1:6" } ],
+  suggestions: [ "Release B-88", "Reopen checkpoint on Normal" ]
+}</pre>
+
+      <p>
+        Checkpoints let you <strong>scope</strong> the failure: it failed
+        <em>under these locks</em>. That is not a proof another Car would work
+        until you reopen and succeed.
+      </p>
+
+      <!-- ========== CACHE ========== -->
+      <h2 id="cache">Sticky success &amp; negative cache</h2>
+      <h3>SAT (sticky)</h3>
+      <p>
+        Persist consist + full hop list + setups. On resolve, if still valid →
+        return without re-search. Avoids needless re-Setup.
+      </p>
+      <h3>UNSAT (negative cache)</h3>
+      <p>
+        Cache failure + reason under a token of <strong>hopeful</strong> world inputs.
+        Do not thrash thousands of Cars when nothing that could open a solution changed.
+      </p>
+      <table>
+        <thead><tr><th>Event</th><th>Retry failed Booking?</th></tr></thead>
+        <tbody>
+          <tr><td>Other Booking claims more capacity</td><td><strong>No</strong> — world tighter</td></tr>
+          <tr><td>Release of claims</td><td><strong>Yes</strong></td></tr>
+          <tr><td>Setup unlock / change that enables</td><td><strong>Yes</strong></td></tr>
+          <tr><td>New cable / legal Yard pair</td><td><strong>Yes</strong></td></tr>
+          <tr><td>New Car online</td><td><strong>Yes</strong></td></tr>
+          <tr><td>Looser policy (higher H)</td><td><strong>Yes</strong></td></tr>
+          <tr><td>This Booking’s legs edited</td><td><strong>Yes</strong></td></tr>
+        </tbody>
+      </table>
+      <p>
+        Yards are included: topology maps, Yard setups, and Yard occupancy all
+        affect hopeful vs non-hopeful revisions.
+      </p>
+
+      <!-- ========== RECOMMEND ========== -->
+      <h2 id="recommend">What else to document → build-ready</h2>
+      <p>
+        Narrative alone is not enough for another session/LLM to implement.
+        Those checklist items are fleshed out as concrete schemas, defaults, and tests in:
+      </p>
+      <div class="callout ok">
+        <strong><code>docs/BUILD_SPEC.md</code></strong> — single build contract (v1).
+        Status tags: <strong>DECIDED</strong> / <strong>DEFAULT</strong> / <strong>OPEN</strong>.
+        Includes data model, Inspector API, Yard capacity, resolve + Coupler algorithms,
+        HTTP/library API, cache rules, concurrency, goldens G1–G12, phases P0–P6, DoD.
+      </div>
+
+      <table>
+        <thead><tr><th>Checklist item</th><th>What a builder needs</th><th>Where specified</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Canonical data model</td>
+            <td>Entity fields, ids, invariants (route may repeat Yard with different hop_key)</td>
+            <td>BUILD_SPEC §3</td>
+          </tr>
+          <tr>
+            <td>Resolve API</td>
+            <td>resolve/release payloads, FailureReport, force, sticky/negative hits</td>
+            <td>§9</td>
+          </tr>
+          <tr>
+            <td>Policy registry</td>
+            <td>H, V, expansions, first_fit, backtrack_depth, checkpoint overrides</td>
+            <td>§7</td>
+          </tr>
+          <tr>
+            <td>Inspector guide</td>
+            <td><code>accept / rank_cost / publish_facts / required_path_facts</code> + toy Classes</td>
+            <td>§5</td>
+          </tr>
+          <tr>
+            <td>Yard type catalog</td>
+            <td>direct/agg/expand/restricted/full + <strong>exclusive</strong> capacity v1</td>
+            <td>§6</td>
+          </tr>
+          <tr>
+            <td>Fact schema</td>
+            <td>Context map, namespacing, Car bind + Yard <code>publish_on_hop</code></td>
+            <td>§4</td>
+          </tr>
+          <tr>
+            <td>Concurrency</td>
+            <td>Txn, lock order, no preemption v1</td>
+            <td>§11</td>
+          </tr>
+          <tr>
+            <td>Golden tests</td>
+            <td>G1–G12 expected behaviors + toy topology</td>
+            <td>§13</td>
+          </tr>
+          <tr>
+            <td>Observability</td>
+            <td>Metrics + fail codes</td>
+            <td>§12</td>
+          </tr>
+          <tr>
+            <td>Non-goals / threats / phases</td>
+            <td>What not to build; edge cases; P0→P6 order</td>
+            <td>§2, §14–15</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Discussion map (how we “satisfy” each topic)</h3>
+      <p>For each topic, you only need to <strong>confirm or override DEFAULTS</strong> — not redesign from zero:</p>
+      <ol>
+        <li><strong>Data model</strong> — Confirm Port/Hop/Reservation shapes; any extra device kinds beyond Car/Yard?</li>
+        <li><strong>API</strong> — Library-only vs HTTP; auth out of scope?</li>
+        <li><strong>Policy numbers</strong> — Are H=16, V=3, max_expansions=50k, wall=500ms acceptable?</li>
+        <li><strong>Inspector</strong> — Real Class request schemas (beyond toy Refrigerated/Normal/Docking)?</li>
+        <li><strong>Yard capacity</strong> — Accept exclusive-only v1, or need combine/share day one?</li>
+        <li><strong>Facts</strong> — Production key names for stamps/cabinets; which Yards publish on hop?</li>
+        <li><strong>Claims</strong> — Hard reserve on SAT only (spec) vs hold during preview?</li>
+        <li><strong>Goldens</strong> — Extend G* with your real topology fixtures later.</li>
+        <li><strong>Stack</strong> — Language/DB choice (spec is language-agnostic).</li>
+      </ol>
+
+      <!-- ========== OPEN ========== -->
+      <h2 id="open">Open questions (with v1 defaults)</h2>
+      <p>
+        Nothing here should block a first implementation. Defaults live in
+        <code>BUILD_SPEC.md</code> §7 and §18. Confirm before production.
+      </p>
+      <table>
+        <thead><tr><th>Question</th><th>DEFAULT v1</th><th>What to discuss to finalize</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Aggregator / expander capacity</td>
+            <td><strong>Exclusive</strong> ports (no RF combine)</td>
+            <td>Do any real junctions require multi-Booking share on Ag?</td>
+          </tr>
+          <tr>
+            <td>Backtrack when checkpoint blocks later leg</td>
+            <td><strong>0</strong> — fail + report checkpoints</td>
+            <td>Is reopen-last-Class required for success rate?</td>
+          </tr>
+          <tr>
+            <td>First-fit vs score all multi-sink goals</td>
+            <td><strong>First-fit</strong> in rank order</td>
+            <td>Need best path among K goals for cost reasons?</td>
+          </tr>
+          <tr>
+            <td>Leg 1 entry / fabric</td>
+            <td><strong>Bind first Car without fabric</strong>; Coupler from leg 1→2</td>
+            <td>Must leg 1 attach through a fixed headend Yard?</td>
+          </tr>
+          <tr>
+            <td>UNSAT cache invalidation</td>
+            <td><strong>Hopeful events only</strong> (not every new claim)</td>
+            <td>Fine-grained deps vs simple hopeful_rev counter?</td>
+          </tr>
+          <tr>
+            <td>Path-acquired Context</td>
+            <td>Coupler state <strong>port + Context</strong>; Yard <code>publish_on_hop</code></td>
+            <td>Prefer mandatory waypoints API instead of mid-search facts?</td>
+          </tr>
+          <tr>
+            <td>Which Yards publish facts</td>
+            <td>Per-instance list; empty default; toy Y2 stamps</td>
+            <td>Enumerate production publishers</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <footer class="note">
+        Living design note. Walkthroughs are illustrative.
+        <strong>Build from:</strong> <code>docs/BUILD_SPEC.md</code> · Index:
+        <code>docs/README.md</code>.
+      </footer>
+    </main>
+  </div>
+
+  <script>
+    /**
+     * Toy topology (shared):
+     *   R-17 ──► Y1 ──► N-* ──► D-*
+     *            │ └─► Y2 ──► N-*  (Y2 also publishes clearance stamp)
+     *            └──────────────► (Y1↔Y2 loopback)
+     * Y1 connects to BOTH Y2 and N so short path Y1→N and multi-yard Y1→Y2→N can play.
+     */
+    /**
+     * Port-level fabric for hop-accurate viz.
+     * Hop syntax: in:DEVICE:out  e.g. 1:Y1:1  or  5:Y1:6
+     * Y1 legal pairs: 1→1 (to N short or toward Y2 via out1/out2), 5→6 after re-entry.
+     * Y1 illegal: 1→6 (shown dashed — never a real hop).
+     */
+    // Layout: columns R | Y1 | Y2 | N | D
+    // No yard multiplex: each OUT track has at most one cable.
+    //   Y1 out1 → N-04 · out2 → Y2 in1 · out3 → N-08 · out6 → N-12 (only after re-entry in5)
+    //   Y2 out5 → N-04 · out6 → Y1 in5 (loopback)
+    //   Illegal Y1 1→6 forces loopback to use out6 for N-12.
+    const YARD_SPECS = {
+      Y1: {
+        id: "y1", label: "Y1",
+        x: 170, y: 40, w: 150, h: 260,
+        ins: ["1", "5"],
+        outs: ["1", "2", "3", "6"],
+        legal: [
+          ["1", "1"], // → N-04
+          ["1", "2"], // → Y2 in1
+          ["1", "3"], // → N-08
+          ["5", "6"], // re-entry → N-12
+        ],
+        illegal: [["1", "6"]], // cannot reach N-12 without re-entry
+      },
+      Y2: {
+        id: "y2", label: "Y2",
+        x: 400, y: 16, w: 130, h: 120,
+        ins: ["1"],
+        outs: ["5", "6"],
+        legal: [
+          ["1", "5"], // → N-04
+          ["1", "6"], // → Y1 in5 loopback
+        ],
+        illegal: [],
+      },
+    };
+
+    // Cables: from [device, outTrack] → [device, inTrack] — 1:1 outs
+    const CABLES = [
+      { id: "e_r_y1", from: ["R-17", "1"], to: ["Y1", "1"] },
+      { id: "e_y1_n", from: ["Y1", "1"], to: ["N-04", "1"] },
+      { id: "e_y1_y2", from: ["Y1", "2"], to: ["Y2", "1"], viaX: 355 },
+      { id: "e_y1_n08", from: ["Y1", "3"], to: ["N-08", "1"], viaX: 540 },
+      // N-12 only via re-entry: Y1 out6 (not out1/out4)
+      { id: "e_y1_n12", from: ["Y1", "6"], to: ["N-12", "1"], viaX: 520 },
+      { id: "e_y2_n", from: ["Y2", "5"], to: ["N-04", "1"] },
+      // Loop: leave Y2 out6 to the RIGHT, under, enter Y1 in5 from the LEFT
+      { id: "e_y2_y1", from: ["Y2", "6"], to: ["Y1", "5"], loopback: true },
+      { id: "e_n_d", from: ["N-04", "1"], to: ["D-02", "1"] },
+      { id: "e_n12_d", from: ["N-12", "1"], to: ["D-11", "1"], viaX: 720 },
+      { id: "e_n_d_busy", from: ["N-04", "1"], to: ["D-11", "1"], viaX: 735 },
+    ];
+
+    const CAR_NODES = [
+      { id: "R-17", key: "r17", x: 28, y: 118, w: 86, h: 50, label: "R-17", kind: "car-a", sub: "out 1" },
+      { id: "N-04", key: "n04", x: 600, y: 72, w: 86, h: 44, label: "N-04", kind: "car-b", sub: "Y1:1 / Y2:5" },
+      { id: "N-08", key: "n08", x: 600, y: 155, w: 86, h: 40, label: "N-08", kind: "car-b", sub: "Y1:3 only" },
+      { id: "N-12", key: "n12", x: 600, y: 230, w: 86, h: 40, label: "N-12", kind: "car-b", sub: "Y1:6 after re-entry" },
+      { id: "D-02", key: "d02", x: 760, y: 72, w: 86, h: 44, label: "D-02", kind: "car-d", sub: "in 1" },
+      { id: "D-11", key: "d11", x: 760, y: 200, w: 86, h: 40, label: "D-11", kind: "car-d", sub: "from N-12" },
+    ];
+
+    function parseHop(h) {
+      if (!h || typeof h !== "string") return null;
+      // 1:Y1:1 or 1:y1:6 — ignore decorative hops
+      const m = h.trim().match(/^(\d+|Ag)\s*:\s*([A-Za-z0-9_-]+)\s*:\s*(\d+|Ag)$/i);
+      if (!m) return null;
+      return { inn: m[1], device: m[2].toUpperCase().replace(/^YARD/, "Y"), out: m[3] };
+    }
+
+    function normalizeDevice(d) {
+      d = String(d).toUpperCase();
+      if (d === "YARD1" || d === "YD1") return "Y1";
+      if (d === "YARD2" || d === "YD2") return "Y2";
+      return d;
+    }
+
+    function findCable(fromDev, fromTrack, toDev, toTrack) {
+      const fd = normalizeDevice(fromDev);
+      const td = normalizeDevice(toDev);
+      return CABLES.find((c) => {
+        const [a, at] = c.from;
+        const [b, bt] = c.to;
+        return normalizeDevice(a) === fd && String(at) === String(fromTrack)
+          && normalizeDevice(b) === td && String(bt) === String(toTrack);
+      });
+    }
+
+    function findCablesInto(toDev, toTrack) {
+      const td = normalizeDevice(toDev);
+      return CABLES.filter((c) => {
+        const [b, bt] = c.to;
+        return normalizeDevice(b) === td && String(bt) === String(toTrack);
+      });
+    }
+
+    function findCablesOutOf(fromDev, fromTrack) {
+      const fd = normalizeDevice(fromDev);
+      return CABLES.filter((c) => {
+        const [a, at] = c.from;
+        return normalizeDevice(a) === fd && String(at) === String(fromTrack);
+      });
+    }
+
+    /**
+     * Highlight internals + cables from hop list.
+     * hopsActive: index of active hop, or -1 = entire list is committed (done).
+     *
+     * Cables are ONLY the path edges:
+     *   (1) between consecutive hops (prev.out → curr.in) — authoritative
+     *   (2) unique entry into the first hop (e.g. R→Y1 when R is not itself a hop)
+     * Never light every cable that shares a port — N-04 in/out1 fans to Y2 and D-11.
+     * Explicit step.edgesOn / edgesDone still merge in paintFabric.
+     */
+    function hopToHighlights(hops, hopsActive) {
+      const raw = hops || [];
+      const parsed = raw.map((h, i) => ({ i, p: parseHop(h), raw: h })).filter((x) => x.p);
+      const activeIdx = hopsActive;
+      // When -1, every hop is "done". When >=0, hops before active are done, active is "on".
+      function hopState(i) {
+        if (activeIdx < 0) return "done";
+        if (i < activeIdx) return "done";
+        if (i === activeIdx) return "on";
+        return null; // future hops not lit yet
+      }
+
+      const internalOn = [];
+      const cableOn = []; // { id, state }
+      const portOn = [];
+      const cableState = {}; // id -> strongest state (on > done)
+
+      function bumpCable(id, state) {
+        if (!id || !state) return;
+        const rank = { on: 2, done: 1 };
+        if (!cableState[id] || rank[state] > rank[cableState[id]]) cableState[id] = state;
+      }
+
+      // Yard crosspoints + ports only — no fan-out cables on shared ports
+      function applyHop(p, state) {
+        if (!p || !state) return;
+        const dev = normalizeDevice(p.device);
+        const isYard = !!YARD_SPECS[dev];
+        if (isYard) {
+          internalOn.push({ device: dev, inn: p.inn, out: p.out, state });
+        }
+        portOn.push({ device: dev, side: "in", track: p.inn, state });
+        portOn.push({ device: dev, side: "out", track: p.out, state });
+      }
+
+      parsed.forEach(({ i, p }) => {
+        const st = hopState(i);
+        if (st) applyHop(p, st);
+      });
+
+      // Consecutive hops: cable from prev.out → curr.in (the only multi-edge-safe rule)
+      for (let k = 0; k < parsed.length - 1; k++) {
+        const stA = hopState(parsed[k].i);
+        const stB = hopState(parsed[k + 1].i);
+        let st = null;
+        if (stA === "on" || stB === "on") st = "on";
+        else if (stA === "done" && stB === "done") st = "done";
+        else if (stA === "done" && stB === null) st = "done"; // path so far
+        if (!st) continue;
+        const a = parsed[k].p;
+        const b = parsed[k + 1].p;
+        const cab = findCable(a.device, a.out, b.device, b.inn);
+        if (cab) bumpCable(cab.id, st);
+      }
+
+      // Entry into first hop when exactly one cable lands on that in-port (R→Y1).
+      // Skip when fan-in (N-04 has Y1 short + Y2) so we do not light the wrong corridor.
+      if (parsed.length) {
+        const first = parsed[0];
+        const st0 = hopState(first.i);
+        if (st0) {
+          const into = findCablesInto(first.p.device, first.p.inn);
+          if (into.length === 1) bumpCable(into[0].id, st0);
+        }
+      }
+
+      Object.keys(cableState).forEach((id) => cableOn.push({ id, state: cableState[id] }));
+
+      return { internalOn, cableOn, portOn, illegalOn: [], parsedActive: null, parsedDone: parsed.map((x) => x.p) };
+    }
+
+    // Legacy FABRIC shape kept for nodesOn id keys (r17, y1, …)
+    const FABRIC = {
+      nodes: CAR_NODES.map((c) => ({ id: c.key, label: c.label, kind: c.kind })),
+      edges: CABLES.map((c) => ({ id: c.id })),
+    };
+
+    const SCENARIOS = [
+      {
+        id: "simple",
+        title: "1 · Simple",
+        blurb: "One Coupler (A*) call = whole segment R→…→N (Yards inside). Assembler does not get a turn at Y1. Then a second Coupler call for N→…→D.",
+        legs: ["R", "N (1 A* segment)", "D (1 A* segment)"],
+        steps: [
+          {
+            phase: "assembler", leg: -1, meta: "Assembler · start",
+            title: "Empty consist · Booking received",
+            body: "Outer loop only. No A* yet. Consist empty, Context empty.",
+            consist: [], ctx: "(empty)", candidates: [],
+            hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
+            notes: "<strong>Assembler</strong> owns Class legs. <strong>Coupler/A*</strong> owns fabric between two Class Cars.",
+          },
+          {
+            phase: "assembler", leg: 0, meta: "Assembler · leg R",
+            title: "Pick & bind R-17 (no Coupler)",
+            body: "First leg: no prior tail. Assembler runs RefrigeratedInspector, binds <strong>R-17</strong>, checkpoints. Fabric not searched yet.",
+            consist: [{ id: "R-17", cls: "a", locked: true }],
+            ctx: "cabinets=4 · closed: Refrigerated",
+            candidates: [
+              { id: "R-17", st: "picked", stage: "prefilter", why: "prefilter+bind: 4N OK (first leg, accept=prefilter)" },
+              { id: "R-22", st: "pass", stage: "prefilter", why: "prefilter OK · not chosen" },
+            ],
+            hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
+            notes: "First leg: no path yet, so prefilter ≈ full check. Tail = R-17 for next Coupler.",
+          },
+          {
+            phase: "assembler", leg: 1, meta: "Assembler · leg N prep",
+            title: "prefilter Normal · request seats &gt; 5",
+            body: "Leg wants Class Normal with <strong>&gt; 5 seats</strong>. Assembler <code>prefilter</code> only: N-08 has 4 seats → drop (no path can add seats). N-04 (8) and N-12 (12) pass. Full Inspector <code>accept</code> (e.g. can route track 1→2) is <em>not</em> run yet.",
+            consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
+            ctx: "cabinets=4 · closed: Refrigerated · request min_seats=6",
+            candidates: [
+              { id: "N-04", st: "pass", stage: "prefilter", why: "8 seats ≥ 6 · A* goal" },
+              { id: "N-08", st: "fail", stage: "prefilter", why: "4 seats &lt; 6 · safe drop (path won't help)" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "12 seats ≥ 6 · A* goal" },
+            ],
+            hops: [], hopsActive: -1,
+            nodesOn: ["r17", "n04", "n12", "y1"],
+            edgesOn: [], edgesDone: [],
+            notes: "prefilter = Assembler. Goals for Coupler = N-04, N-12 only. Track 1→2 checked later in accept.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "A* expand 1 · same call",
+            title: "Inner A* reaches Y1 (still one Coupler call)",
+            body: "A* expands R→Y1, hop <code>1:Y1:1</code>. Assembler waiting. Goals are prefilter-passers only (N-04, N-12). <code>accept()</code> not run until a goal port is reached.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→1 expanding", active: true },
+              { id: "?", cls: "b", ghost: true },
+            ],
+            ctx: "cabinets=4 · (path Context mid-search)",
+            candidates: [
+              { id: "N-04", st: "pass", stage: "prefilter", why: "goal not reached yet" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "goal not reached yet" },
+            ],
+            hops: ["1:Y1:1"], hopsActive: 0,
+            nodesOn: ["r17", "y1"],
+            edgesOn: ["e_r_y1"],
+            edgesDone: [],
+            notes: "Partial path inside one A* run. N-08 never a goal (failed prefilter seats).",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "A* goal · same call",
+            title: "accept() at N-04 · full Inspector on arrival",
+            body: "Same Coupler call: path arrives N-04 on track 1, needs out track 1 (or 2). <code>accept()</code> runs thorough checks (seats again + <strong>can_route in→out</strong> + path Context). Pass → return hops + car to Assembler.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→1" },
+              { id: "N-04", cls: "b", locked: true, active: true },
+            ],
+            ctx: "cabinets=4 · seats=8 · closed: Refrigerated, Normal",
+            candidates: [
+              { id: "N-04", st: "picked", stage: "accept", why: "accept OK · seats 8 + route track 1→1" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "still a goal · not reached first" },
+            ],
+            hops: ["1:Y1:1", "1:N-04:1"], hopsActive: 1,
+            nodesOn: ["r17", "y1", "n04"],
+            edgesOn: ["e_y1_n"],
+            edgesDone: ["e_r_y1"],
+            notes: "One Coupler invocation = entire segment <strong>R → Y1 → N</strong>. There is no separate Assembler step “go to Y1.”",
+          },
+          {
+            phase: "assembler", leg: 1, meta: "Assembler · after Coupler",
+            title: "Assembler commits N-04 + full hop list",
+            body: "Assembler appends the returned hops to the Booking route, merges facts, checkpoints Normal, sets <code>tail = N-04</code>. Ready for Docking leg.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "from segment 1" },
+              { id: "N-04", cls: "b", locked: true },
+            ],
+            ctx: "cabinets=4 · seats=2 · closed: Refrigerated, Normal",
+            candidates: [],
+            hops: ["1:Y1:1", "1:N-04:1"], hopsActive: -1,
+            nodesOn: ["r17", "y1", "n04"],
+            edgesOn: [],
+            edgesDone: ["e_r_y1", "e_y1_n"],
+            notes: "Consist & path now shows Y1 because the <em>returned route</em> included it — not because Assembler navigated there.",
+          },
+          {
+            phase: "coupler", leg: 2, meta: "A* segment 2",
+            title: "New Coupler call: N-04 → D-*",
+            body: "Second inner run. Starts = N-04 outs, goals = Docking ports. Independent of the first A* (except reserved capacity / Context).",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "prior segment" },
+              { id: "N-04", cls: "b", locked: true },
+              { id: "D-02", cls: "d", locked: true, active: true },
+            ],
+            ctx: "… · connector=1",
+            candidates: [{ id: "D-02", st: "picked", why: "goal of 2nd Coupler call" }],
+            hops: ["1:Y1:1", "1:N-04:1", "1:D-02:1"], hopsActive: 2,
+            nodesOn: ["n04", "d02"],
+            edgesOn: ["e_n_d"],
+            edgesDone: ["e_r_y1", "e_y1_n"],
+            notes: "Two Coupler calls total for three Class legs: (1) after R toward N, (2) after N toward D. First leg R needed no Coupler.",
+          },
+          {
+            phase: "system", leg: 2, meta: "SAT",
+            title: "Booking SAT",
+            body: "Sticky stores consist + full route (all hops from every Coupler return).",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "seg1" },
+              { id: "N-04", cls: "b", locked: true },
+              { id: "D-02", cls: "d", locked: true },
+            ],
+            ctx: "done", candidates: [],
+            hops: ["1:Y1:1", "1:N-04:1", "1:D-02:1"], hopsActive: -1,
+            nodesOn: ["r17", "y1", "n04", "d02"],
+            edgesOn: [], edgesDone: ["e_r_y1", "e_y1_n", "e_n_d"],
+            notes: "Mental model: Assembler steps Class→Class; each Coupler call fills in the Yards/cables between.",
+          },
+        ],
+      },
+      {
+        id: "multiyard",
+        title: "2 · Multi-Yard + path Context",
+        blurb: "Short Y1→N wires exist but accept fails without y2_stamp (path Context). Coupler keeps expanding → Y2 publishes stamp → Y2→N-04 accepts. One scenario: multi-Yard discovery + why Context forces detours.",
+        legs: ["R fresh", "N short fails stamp", "via Y2", "D"],
+        steps: [
+          {
+            phase: "assembler", leg: -1, meta: "Fresh resolve",
+            title: "Empty consist · Booking received",
+            body: "Assembler starts with <strong>no Cars bound</strong>, empty Context, empty route. Legs: Refrigerated → Normal → Docking.",
+            consist: [], ctx: "(empty)", candidates: [],
+            hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
+            notes: "Same cold start as Simple — nothing pre-bound.",
+          },
+          {
+            phase: "assembler", leg: 0, meta: "Leg R",
+            title: "Bind Refrigerated R-17",
+            body: "Inspector accepts R-17 (4N). Publish <code>cabinets=4</code>. Checkpoint Refrigerated. Still <strong>no</strong> <code>y2_stamp</code>.",
+            consist: [{ id: "R-17", cls: "a", locked: true }],
+            ctx: "cabinets=4 · closed: Refrigerated · y2_stamp: missing",
+            candidates: [
+              { id: "R-17", st: "picked", stage: "prefilter", why: "prefilter+bind: 4N OK" },
+              { id: "R-22", st: "pass", stage: "prefilter", why: "prefilter OK" },
+            ],
+            hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
+            notes: "Tail = R-17 for next Coupler. Normal leg next — seats prefilter then accept at goal.",
+          },
+          {
+            phase: "assembler", leg: 1, meta: "Leg N · goals",
+            title: "prefilter Normal · seats &gt; 5 (no stamp check yet)",
+            body: "Request min_seats=6. <strong>prefilter</strong>: N-08 (4 seats) dropped. N-04/N-12 pass. Stamp / track 1→2 are <em>not</em> prefilter — those wait for <code>accept()</code> at the Car after a path.",
+            consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
+            ctx: "cabinets=4 · y2_stamp: missing · min_seats=6",
+            candidates: [
+              { id: "N-04", st: "pass", stage: "prefilter", why: "8 seats · A* goal" },
+              { id: "N-08", st: "fail", stage: "prefilter", why: "4 seats &lt; 6 · never a goal" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "12 seats · A* goal" },
+            ],
+            hops: [], hopsActive: -1,
+            nodesOn: ["r17", "y1", "n04", "n08", "n12", "y2"],
+            edgesOn: [], edgesDone: [],
+            notes: "Fresh after R only — discovery of Y2 comes later from continued search.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "Try 1 · N-04 short",
+            title: "Try cable Y1 out1 → N-04",
+            body: "Cheapest path: hop <code>1:Y1:1</code>, cable <strong>Y1→N-04</strong>. Arrive without stamp → Inspector <strong>rejects</strong>. Do not bind. Keep searching.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→1 short", active: true },
+              { id: "N-04", cls: "b", ghost: true },
+            ],
+            ctx: "y2_stamp: still missing",
+            candidates: [
+              { id: "N-04", st: "fail", stage: "accept", why: "accept: missing y2_stamp (path Context)" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "still an A* goal · not tried this expansion" },
+            ],
+            hops: ["1:Y1:1", "1:N-04:1", "✗ accept"], hopsActive: 0,
+            nodesOn: ["r17", "y1", "n04"],
+            edgesOn: ["e_r_y1", "e_y1_n"],
+            edgesDone: [],
+            edgesBlocked: [],
+            notes: "Cyan under test: hop <code>1:Y1:1</code> → <strong>Y1 out1 → N-04</strong>. N-12 is not on a short out from in1 (illegal 1→6; only via re-entry out6).",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "Expand Y2",
+            title: "Continue → hop 1:Y1:2 toward Y2",
+            body: "Hop <code>1:Y1:2</code> onto cable <strong>Y1→Y2</strong>. Goals N-04/N-12 still open. N-12 cannot be reached without later re-entry.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→2", active: true },
+              { id: "Y2", cls: "yard", hop: "enter", active: true },
+              { id: "?", cls: "b", ghost: true },
+            ],
+            ctx: "y2_stamp: missing (until Y2 hop)",
+            candidates: [
+              { id: "N-04", st: "pass", stage: "prefilter", why: "still a goal via Y2:5" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "goal via re-entry out6 later" },
+            ],
+            hops: ["1:Y1:2"], hopsActive: 0,
+            nodesOn: ["y1", "y2"],
+            edgesOn: ["e_y1_y2"],
+            edgesDone: ["e_r_y1"],
+            edgesBlocked: ["e_y1_n"],
+            notes: "Cyan Y1→Y2. Short Y1→N-04 red (accept failed on stamp).",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "Stamp + accept",
+            title: "accept() at N-04 after Y2 stamp",
+            body: "Y2 hop publishes stamp. Cable <strong>Y2 out5 → N-04</strong> is free. <code>accept()</code>: seats OK, stamp OK → success. (If this cable were closed, search would loop back — see scenario Loopback.)",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→2" },
+              { id: "Y2", cls: "yard", hop: "1→5 stamp", active: true },
+              { id: "N-04", cls: "b", locked: true, active: true },
+            ],
+            ctx: "cabinets=4 · y2_stamp: ok · seats=8 · closed: Refrigerated, Normal",
+            candidates: [
+              { id: "N-04", st: "picked", stage: "accept", why: "accept OK · stamp + Y2:5 free" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "not needed — N-04 succeeded first" },
+            ],
+            hops: ["1:Y1:2", "1:Y2:5", "1:N-04:1"], hopsActive: 2,
+            nodesOn: ["y1", "y2", "n04"],
+            edgesOn: ["e_y2_n"],
+            edgesDone: ["e_r_y1", "e_y1_y2"],
+            edgesBlocked: ["e_y1_n"],
+            notes: "Path Y2→N-04. Loopback Y2→Y1 and Y1 out6→N-12 stay idle.",
+          },
+          {
+            phase: "system", leg: 2, meta: "Finish D",
+            title: "N → D · multi-Yard SAT",
+            body: "Full path: R — Y1 — Y2 — N-04 — D.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→2" },
+              { id: "Y2", cls: "yard", hop: "stamp" },
+              { id: "N-04", cls: "b", locked: true },
+              { id: "D-02", cls: "d", locked: true },
+            ],
+            ctx: "complete",
+            candidates: [],
+            hops: ["1:Y1:2", "1:Y2:5", "1:N-04:1", "1:D-02:1"], hopsActive: -1,
+            nodesOn: ["r17", "y1", "y2", "n04", "d02"],
+            edgesOn: [],
+            edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_n", "e_n_d"],
+            edgesBlocked: ["e_y1_n"],
+            notes: "Happy multi-Yard when Y2→N-04 is free. Contrast: Loopback scenario when that cable is closed.",
+          },
+        ],
+      },
+      {
+        id: "loopback",
+        title: "3 · Loopback + anti-spin",
+        blurb: "Useful re-entry when Y2→N-04 is closed (→ N-12 via Y1 in5/out6), then how hop_key + V/H caps stop infinite Y1↔Y2 thrash. Goldens G1/G2.",
+        legs: ["R", "re-entry SAT", "anti-loop"],
+        steps: [
+          {
+            phase: "assembler", leg: -1, meta: "Fresh resolve",
+            title: "Empty consist · Booking received",
+            body: "Cold start. World fact: cable <strong>Y2 out5 → N-04 is closed</strong> (capacity / reserved).",
+            consist: [], ctx: "(empty)", candidates: [],
+            hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
+            edgesBlocked: ["e_y2_n"],
+            notes: "Same fabric as Multi-Yard; only occupancy differs on e_y2_n.",
+          },
+          {
+            phase: "assembler", leg: 0, meta: "Leg R",
+            title: "Bind R-17",
+            body: "Refrigerated OK. <code>y2_stamp</code> still missing.",
+            consist: [{ id: "R-17", cls: "a", locked: true }],
+            ctx: "cabinets=4 · closed: Refrigerated · y2_stamp: missing",
+            candidates: [{ id: "R-17", st: "picked", stage: "prefilter", why: "prefilter+bind OK" }],
+            hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
+            edgesBlocked: ["e_y2_n"],
+            notes: "Tail = R-17.",
+          },
+          {
+            phase: "assembler", leg: 1, meta: "prefilter N",
+            title: "prefilter Normal · seats &gt; 5",
+            body: "N-08 dropped (seats). N-04 and N-12 remain goals. Stamp not checked here.",
+            consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
+            ctx: "cabinets=4 · y2_stamp: missing · min_seats=6",
+            candidates: [
+              { id: "N-04", st: "pass", stage: "prefilter", why: "8 seats · goal" },
+              { id: "N-08", st: "fail", stage: "prefilter", why: "4 seats" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "12 seats · goal (needs re-entry path)" },
+            ],
+            hops: [], hopsActive: -1,
+            nodesOn: ["r17", "y1", "n04", "n12", "y2"],
+            edgesOn: [], edgesDone: [],
+            edgesBlocked: ["e_y2_n"],
+            notes: "N-12 only reachable via Y1 out6 after in5 re-entry — not a short hop from in1.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "Short N-04",
+            title: "Short Y1→N-04 · accept fails (stamp)",
+            body: "Try hop <code>1:Y1:1</code> → N-04. Wire free; <code>accept()</code> rejects — missing <code>y2_stamp</code>. Keep searching (same Coupler call).",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→1", active: true },
+              { id: "N-04", cls: "b", ghost: true },
+            ],
+            ctx: "y2_stamp: still missing",
+            candidates: [
+              { id: "N-04", st: "fail", stage: "accept", why: "accept: missing y2_stamp" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "still a goal" },
+            ],
+            hops: ["1:Y1:1", "1:N-04:1", "✗ accept"], hopsActive: 0,
+            nodesOn: ["r17", "y1", "n04"],
+            edgesOn: ["e_r_y1", "e_y1_n"],
+            edgesDone: [],
+            edgesBlocked: ["e_y2_n"],
+            notes: "Fail is Context, not the closed Y2→N-04 cable.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "Y2 enter",
+            title: "Expand Y1→Y2 · enter Y2",
+            body: "Hop <code>1:Y1:2</code> onto Y2. Prefer exit out5 toward N-04 (cheaper to a goal). Stamp publishes when the Y2 hop is expanded.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→2" },
+              { id: "Y2", cls: "yard", hop: "enter", active: true },
+              { id: "?", cls: "b", ghost: true },
+            ],
+            ctx: "y2_stamp: ok (on Y2 hop) · try out5 next",
+            candidates: [
+              { id: "N-04", st: "pass", stage: "prefilter", why: "prefer via Y2:5" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "via loopback if out5 fails" },
+            ],
+            hops: ["1:Y1:2"], hopsActive: 0,
+            nodesOn: ["y1", "y2"],
+            edgesOn: ["e_y1_y2"],
+            edgesDone: ["e_r_y1"],
+            edgesBlocked: ["e_y1_n", "e_y2_n"],
+            notes: "Y2→N-04 already known closed (red) — search will not commit that cable.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "Y2→N-04 blocked",
+            title: "Y2 out5 → N-04 closed · skip",
+            body: "Out5 cable is <strong>CAPACITY_BLOCKED</strong>. Cannot arrive N-04 this way. Same Coupler call: try Y2 out6 (loopback) instead.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "prior" },
+              { id: "Y2", cls: "yard", hop: "out5 blocked", active: true },
+              { id: "N-04", cls: "b", ghost: true },
+            ],
+            ctx: "y2_stamp: ok · Y2→N-04 closed",
+            candidates: [
+              { id: "N-04", st: "fail", stage: "accept", why: "edge closed · cannot arrive" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "try loopback path" },
+            ],
+            hops: ["1:Y1:2", "✗ Y2 out5→N-04"], hopsActive: 0,
+            nodesOn: ["y2", "n04"],
+            edgesOn: [],
+            edgesDone: ["e_r_y1", "e_y1_y2"],
+            edgesBlocked: ["e_y1_n", "e_y2_n"],
+            notes: "Goal reject / edge skip inside Coupler — not a new Assembler A*.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "Loopback",
+            title: "Loopback Y2 out6 → Y1 in5 → out6",
+            body: "Hop <code>1:Y2:6</code> (IN1→OUT6) publishes stamp, cable to <strong>Y1 IN 5</strong>, then internal <code>5:Y1:6</code> (legal). Illegal <code>1→6</code> never used.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "re-enter 5→6", active: true },
+              { id: "Y2", cls: "yard", hop: "1→6 loopback" },
+              { id: "?", cls: "b", ghost: true },
+            ],
+            ctx: "y2_stamp: ok · re-entered Y1",
+            candidates: [
+              { id: "N-12", st: "pass", stage: "prefilter", why: "next cable Y1:6→N-12" },
+            ],
+            hops: ["1:Y1:2", "1:Y2:6", "5:Y1:6"], hopsActive: 2,
+            nodesOn: ["y1", "y2"],
+            edgesOn: ["e_y2_y1"],
+            edgesDone: ["e_r_y1", "e_y1_y2"],
+            edgesBlocked: ["e_y1_n", "e_y2_n"],
+            notes: "Two Y1 hop_keys: 1→2 then 5→6. Same yard, different ports.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "N-12 accept",
+            title: "Y1 out6 → N-12 · accept OK",
+            body: "Internal <code>5:Y1:6</code> then cable <strong>out6 → N-12</strong>. <code>accept()</code>: seats OK + stamp from Y2 on path Context → bind N-12.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "5→6" },
+              { id: "Y2", cls: "yard", hop: "stamp + loopback" },
+              { id: "N-12", cls: "b", locked: true, active: true },
+            ],
+            ctx: "cabinets=4 · y2_stamp: ok · seats=12 · closed: Refrigerated, Normal",
+            candidates: [
+              { id: "N-04", st: "fail", stage: "accept", why: "Y2→N-04 closed" },
+              { id: "N-12", st: "picked", stage: "accept", why: "accept OK via re-entry" },
+            ],
+            hops: ["1:Y1:2", "1:Y2:6", "5:Y1:6", "1:N-12:1"], hopsActive: 3,
+            nodesOn: ["y1", "y2", "n12"],
+            edgesOn: ["e_y1_n12"],
+            edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_y1"],
+            edgesBlocked: ["e_y1_n", "e_y2_n"],
+            notes: "One Coupler call: short fail → Y2 → blocked exit → loopback → N-12.",
+          },
+          {
+            phase: "system", leg: 2, meta: "SAT",
+            title: "N-12 → D · loopback SAT",
+            body: "Finish Docking from N-12. Full route revisits Y1 with two hop_keys.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→2 then 5→6" },
+              { id: "Y2", cls: "yard", hop: "loopback" },
+              { id: "N-12", cls: "b", locked: true },
+              { id: "D-11", cls: "d", locked: true },
+            ],
+            ctx: "complete",
+            candidates: [],
+            hops: ["1:Y1:2", "1:Y2:6", "5:Y1:6", "1:N-12:1", "1:D-11:1"], hopsActive: -1,
+            nodesOn: ["r17", "y1", "y2", "n12", "d11"],
+            edgesOn: [],
+            edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_y1", "e_y1_n12", "e_n12_d"],
+            edgesBlocked: ["e_y1_n", "e_y2_n"],
+            notes: "Useful re-entry: different hop_keys on Y1. Next steps: why this must not become infinite Y1↔Y2 thrash.",
+          },
+          {
+            phase: "system", leg: 1, meta: "Anti-loop lesson",
+            title: "Useful re-entry ≠ infinite loopback",
+            body: "Without guards, after failing Y2→N-04 the search could bounce <strong>Y1↔Y2 forever</strong> (same ports, no progress). That is oscillation — not the legal re-entry we just used.",
+            consist: [
+              { id: "Y1", cls: "yard", hop: "1→2 already used", active: true },
+              { id: "Y2", cls: "yard", hop: "1→6 already used", active: true },
+            ],
+            ctx: "closed-set must remember hop_keys (+ Context)",
+            candidates: [],
+            hops: ["1:Y1:2", "1:Y2:6", "5:Y1:6", "… 1:Y1:2 again? ✗"], hopsActive: 3,
+            nodesOn: ["y1", "y2"],
+            edgesOn: ["e_y1_y2", "e_y2_y1"],
+            edgesDone: [],
+            edgesBlocked: ["e_y2_n"],
+            notes: "<strong>Legal:</strong> <code>1:Y1:2</code> then later <code>5:Y1:6</code> (new hop_key). <strong>Illegal thrash:</strong> expand <code>1:Y1:2</code> or <code>1:Y2:6</code> again on the same path.",
+          },
+          {
+            phase: "system", leg: 1, meta: "Guards",
+            title: "How Coupler prevents infinite loopbacks",
+            body: "DEFAULT v1 policy (see BUILD_SPEC). These make G2 (no oscillation) pass without banning real re-entry.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "N-12", cls: "b", locked: true },
+            ],
+            ctx: "guards · not heuristics alone",
+            candidates: [],
+            hops: ["1:Y1:2", "1:Y2:6", "5:Y1:6"], hopsActive: -1,
+            nodesOn: ["y1", "y2", "n12"],
+            edgesOn: [],
+            edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_y1", "e_y1_n12"],
+            edgesBlocked: ["e_y2_n"],
+            failure: `{
+  // Anti-loop / budget (DEFAULT v1)
+  forbid_repeat_hop_key: true,     // hop_key = (device, in, out) unique on path
+  // optional: forbid_immediate_cable_backtrack
+  max_visits_per_yard: 3,          // V — hard cap even with new hop_keys
+  max_hops: 16,                    // H
+  max_expansions: 50_000,
+  max_wall_ms: 500,
+  // Closed set: (port, context_fingerprint) so accept-reject at N
+  // does not permanently kill later stamp paths — but hop_key still unique
+  on_exceed: "BUDGET"              // finite UNSAT, never hang
+}`,
+            notes: "<strong>Allow</strong> re-entry when hop_key is new and Context improved. <strong>Kill</strong> same hop_key, visit&gt;V, hops&gt;H, expansions wall → <code>BUDGET</code>. Golden G2.",
+          },
+        ],
+      },
+      {
+        id: "prefilter",
+        title: "4 · Prefilter rejection",
+        blurb: "Fresh start → bind R → all Normal Cars fail Assembler prefilter (zero Coupler goals; accept never runs).",
+        legs: ["R fresh", "N prefilter empty"],
+        steps: [
+          {
+            phase: "assembler", leg: -1, meta: "Fresh resolve",
+            title: "Empty consist · Booking received",
+            body: "No bounds yet.",
+            consist: [], ctx: "(empty)", candidates: [],
+            hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
+            notes: "Cold Assembler.",
+          },
+          {
+            phase: "assembler", leg: 0, meta: "Leg R",
+            title: "Bind R-17",
+            body: "Refrigerated prefilter+bind OK. cabinets=4.",
+            consist: [{ id: "R-17", cls: "a", locked: true }],
+            ctx: "cabinets=4 · closed: Refrigerated · min_seats=6",
+            candidates: [{ id: "R-17", st: "picked", stage: "prefilter", why: "prefilter+bind OK" }],
+            hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
+            notes: "Next: Normal prefilter only — Coupler never starts if zero goals.",
+          },
+          {
+            phase: "assembler", leg: 1, meta: "prefilter pool",
+            title: "All Normal Cars fail prefilter",
+            body: "Request seats &gt; 5 plus a hard protocol flag. <strong>prefilter</strong> drops everyone path-independently (N-08 seats; N-04/N-12 protocol never supported). No Coupler call — no fabric, no accept().",
+            consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
+            ctx: "cabinets=4 · min_seats=6",
+            candidates: [
+              { id: "N-04", st: "fail", stage: "prefilter", why: "protocol never supported" },
+              { id: "N-08", st: "fail", stage: "prefilter", why: "4 seats &lt; 6" },
+              { id: "N-12", st: "fail", stage: "prefilter", why: "protocol never supported" },
+            ],
+            hops: [], hopsActive: -1,
+            nodesOn: ["n04", "n08", "n12"], edgesOn: [], edgesDone: [],
+            notes: "All fails are prefilter (Assembler). accept() never ran.",
+          },
+          {
+            phase: "fail", leg: 1, meta: "UNSAT",
+            title: "NO_CANDIDATES (prefilter empty)",
+            body: "No Coupler goals. Failure is Assembler-level prefilter, not track routing.",
+            consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
+            ctx: "cabinets=4", candidates: [],
+            hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
+            failure: `{
+  status: "UNSAT",
+  failed_leg: 2,
+  code: "NO_CANDIDATES",
+  stage: "prefilter",
+  checkpoints: [{ leg: 1, class: "Refrigerated", car: "R-17" }],
+  counts: { pool: 3, prefilter_pass: 0 },
+  suggestions: ["Reopen Refrigerated checkpoint", "Relax min_seats / protocol"]
+}`,
+            notes: "Contrast Multi-Yard: there prefilter passed some Cars; accept failed on path Context.",
+          },
+        ],
+      },
+      {
+        id: "nosol",
+        title: "5 · No solution",
+        blurb: "Fresh start → R → Y1 → N succeeds → Docking capacity-blocked on N→D.",
+        legs: ["R fresh", "N OK", "D blocked"],
+        steps: [
+          {
+            phase: "assembler", leg: -1, meta: "Fresh resolve",
+            title: "Empty consist · Booking received",
+            body: "Cold start.",
+            consist: [], ctx: "(empty)", candidates: [],
+            hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
+            notes: "No pre-bound Cars.",
+          },
+          {
+            phase: "assembler", leg: 0, meta: "Leg R",
+            title: "Bind R-17",
+            body: "Refrigerated OK.",
+            consist: [{ id: "R-17", cls: "a", locked: true }],
+            ctx: "cabinets=4 · closed: Refrigerated",
+            candidates: [{ id: "R-17", st: "picked", why: "OK" }],
+            hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
+            notes: "Next Normal via simple corridor.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "Leg N",
+            title: "R → Y1 → N-04 (short) succeeds",
+            body: "Stamp already satisfied for this scenario (or not required). Bind N-04 on short path.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→1" },
+              { id: "N-04", cls: "b", locked: true, active: true },
+            ],
+            ctx: "cabinets=4 · seats=2 · closed: Refrigerated, Normal",
+            candidates: [{ id: "N-04", st: "picked", why: "Inspector OK" }],
+            hops: ["1:Y1:1", "1:N-04:1"], hopsActive: 1,
+            nodesOn: ["r17", "y1", "n04"],
+            edgesOn: ["e_y1_n"], edgesDone: ["e_r_y1"],
+            notes: "Partial consist ready for Docking.",
+          },
+          {
+            phase: "coupler", leg: 2, meta: "Blocked",
+            title: "N → D edges fully reserved",
+            body: "DockingInspector accepts D-02/D-11, but B-88 holds N→D capacity. No free path.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "R→N" },
+              { id: "N-04", cls: "b", locked: true },
+              { id: "?", cls: "d", ghost: true },
+            ],
+            ctx: "…", candidates: [
+              { id: "D-02", st: "busy", why: "path full" },
+              { id: "D-11", st: "busy", why: "path full" },
+            ],
+            hops: ["✗ N→D blocked"], hopsActive: 0,
+            nodesOn: ["n04", "d02"], edgesOn: [], edgesDone: ["e_r_y1", "e_y1_n"],
+            edgesBlocked: ["e_n_d", "e_n_d_busy"],
+            notes: "Capacity, not Inspector.",
+          },
+          {
+            phase: "fail", leg: 2, meta: "UNSAT",
+            title: "CAPACITY_BLOCKED · no solution",
+            body: "Failed under checkpoints R-17, N-04 after a full cold-start attempt.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "held" },
+              { id: "N-04", cls: "b", locked: true },
+              { id: "D-??", cls: "d", ghost: true },
+            ],
+            ctx: "partial consist only", candidates: [],
+            hops: [], hopsActive: -1, nodesOn: ["n04"], edgesOn: [], edgesDone: [],
+            edgesBlocked: ["e_n_d"],
+            failure: `{
+  status: "UNSAT",
+  failed_leg: 3,
+  code: "CAPACITY_BLOCKED",
+  checkpoints: [
+    { leg: 1, class: "Refrigerated", car: "R-17" },
+    { leg: 2, class: "Normal", car: "N-04" }
+  ],
+  blockers: [{ booking: "B-88", edge: "N→D" }],
+  suggestions: ["Release B-88", "Wait for capacity"]
+}`,
+            notes: "Hopeful release can unlock a later resolve.",
+          },
+        ],
+      },
+      {
+        id: "sticky",
+        title: "6 · Sticky & cache",
+        blurb: "Fresh resolve to SAT → sticky hit on re-resolve → then UNSAT cache behavior.",
+        legs: ["cold SAT", "sticky", "UNSAT cache"],
+        steps: [
+          {
+            phase: "assembler", leg: -1, meta: "Fresh resolve",
+            title: "Empty consist · first resolve",
+            body: "No snapshot yet. Assembler runs cold.",
+            consist: [], ctx: "(empty)", candidates: [],
+            hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
+            notes: "Will produce a sticky snapshot.",
+          },
+          {
+            phase: "system", leg: 2, meta: "Cold SAT",
+            title: "First resolve succeeds R—Y1—N—D",
+            body: "Full Assembler+Coupler run (summarized). Snapshot stores Cars + Yard hops + cables.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→1" },
+              { id: "N-04", cls: "b", locked: true },
+              { id: "D-02", cls: "d", locked: true },
+            ],
+            ctx: "snapshot written",
+            candidates: [],
+            hops: ["1:Y1:1", "1:N-04:1", "1:D-02:1"], hopsActive: -1,
+            nodesOn: ["r17", "y1", "n04", "d02"],
+            edgesOn: [], edgesDone: ["e_r_y1", "e_y1_n", "e_n_d"],
+            notes: "This is the only full search in the sticky happy path.",
+          },
+          {
+            phase: "system", leg: -1, meta: "Sticky hit",
+            title: "Resolve again · no search",
+            body: "World unchanged → return snapshot. sticky_hit=true.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→1" },
+              { id: "N-04", cls: "b", locked: true },
+              { id: "D-02", cls: "d", locked: true },
+            ],
+            ctx: "sticky hit", candidates: [],
+            hops: ["(replayed)"], hopsActive: -1,
+            nodesOn: ["r17", "y1", "n04", "d02"],
+            edgesOn: [], edgesDone: ["e_r_y1", "e_y1_n", "e_n_d"],
+            notes: "No re-Setup; expansions=0.",
+          },
+          {
+            phase: "fail", leg: -1, meta: "Prior UNSAT",
+            title: "Another Booking failed earlier",
+            body: "UNSAT cached with hopeful_token (e.g. capacity).",
+            consist: [], ctx: "UNSAT cached", candidates: [],
+            hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
+            failure: `{ status: "UNSAT", code: "CAPACITY_BLOCKED", hopeful_token: "…" }`,
+            notes: "Separate Booking — negative cache.",
+          },
+          {
+            phase: "system", leg: -1, meta: "No hopeful",
+            title: "Re-resolve UNSAT · cache hit",
+            body: "No hopeful change → return cached failure, no car scan.",
+            consist: [], ctx: "UNSAT cache hit", candidates: [],
+            hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
+            notes: "Claims alone do not bust UNSAT cache.",
+          },
+          {
+            phase: "assembler", leg: -1, meta: "Hopeful",
+            title: "Release → cache miss · full resolve again",
+            body: "Hopeful event. Fresh Assembler run from empty (or revalidate) may SAT.",
+            consist: [], ctx: "cache miss · cold-ish resolve", candidates: [],
+            hops: [], hopsActive: -1,
+            nodesOn: ["r17", "y1", "n04", "d02"],
+            edgesOn: ["e_r_y1", "e_y1_n", "e_n_d"], edgesDone: [],
+            notes: "Back to full search when the world can improve.",
+          },
+        ],
+      },
+    ];
+
+    let scenarioIdx = 0;
+    let stepIdx = 0;
+
+    function currentScenario() { return SCENARIOS[scenarioIdx]; }
+    function currentSteps() { return currentScenario().steps; }
+
+    /**
+     * Full topology via Cytoscape.js (2D graph library).
+     * Edge ids align with FABRIC step highlights (fabricAlias maps fan-out edges).
+     */
+    let topoCy = null;
+
+    const TOPO_EDGES = [
+      { id: "e_r_y1", source: "r17", target: "y1", label: "R→Y1" },
+      { id: "e_r22_y1", source: "r22", target: "y1", label: "R→Y1", fabricAlias: "e_r_y1" },
+      { id: "e_y1_y2", source: "y1", target: "y2", label: "Y1:2→Y2:1" },
+      { id: "e_y2_y1", source: "y2", target: "y1", label: "Y2:6→Y1:5" },
+      { id: "e_y1_n", source: "y1", target: "n04", label: "Y1:1→N-04" },
+      { id: "e_y1_n08", source: "y1", target: "n08", label: "Y1:3→N-08" },
+      { id: "e_y1_n12", source: "y1", target: "n12", label: "Y1:6→N-12" },
+      { id: "e_y2_n", source: "y2", target: "n04", label: "Y2:5→N-04" },
+      { id: "e_n_d", source: "n04", target: "d02", label: "N-04→D-02" },
+      { id: "e_n08_d", source: "n08", target: "d02", label: "N→D", fabricAlias: "e_n_d" },
+      { id: "e_n12_d", source: "n12", target: "d11", label: "N-12→D-11" },
+      { id: "e_n_d_busy", source: "n04", target: "d11", label: "N→D alt" },
+    ];
+
+    const TOPO_NODES = [
+      { id: "r17", label: "R-17", sub: "Refrigerated Car", kind: "car-a", x: 80, y: 100 },
+      { id: "r22", label: "R-22", sub: "Refrigerated Car", kind: "car-a", x: 80, y: 200 },
+      { id: "y1", label: "Y1", sub: "Yard hub", kind: "yard", x: 260, y: 150 },
+      { id: "y2", label: "Y2", sub: "Yard · stamp", kind: "yard", x: 260, y: 40 },
+      { id: "n04", label: "N-04", sub: "Normal Car", kind: "car-b", x: 460, y: 60 },
+      { id: "n08", label: "N-08", sub: "Normal Car", kind: "car-b", x: 460, y: 150 },
+      { id: "n12", label: "N-12", sub: "Normal Car", kind: "car-b", x: 460, y: 240 },
+      { id: "d02", label: "D-02", sub: "Docking Car", kind: "car-d", x: 660, y: 100 },
+      { id: "d11", label: "D-11", sub: "Docking Car", kind: "car-d", x: 660, y: 200 },
+    ];
+
+    function edgeHighlightState(step, edgeMeta) {
+      // Match exact topo edge id only. Do NOT fan out via fabricAlias
+      // (that used to light Y2→N / N→D-11 whenever e_y1_n / e_n_d were on).
+      const blocked = step.edgesBlocked || [];
+      const on = step.edgesOn || [];
+      const done = step.edgesDone || [];
+      if (blocked.includes(edgeMeta.id)) return "blocked";
+      if (on.includes(edgeMeta.id)) return "on";
+      if (done.includes(edgeMeta.id)) return "done";
+      return "idle";
+    }
+
+    function buildTopoGraph() {
+      const el = document.getElementById("topoGraph");
+      if (!el || typeof cytoscape === "undefined") {
+        if (el) el.innerHTML = "<p style='color:#f87171;padding:1rem'>Cytoscape failed to load. Ensure <code>docs/vendor/cytoscape.min.js</code> is present (offline bundle, no CDN).</p>";
+        return;
+      }
+
+      const elements = [];
+      for (const n of TOPO_NODES) {
+        elements.push({
+          data: { id: n.id, label: n.label, sub: n.sub, kind: n.kind },
+          position: { x: n.x, y: n.y },
+          grabbable: true,
+        });
+      }
+      for (const e of TOPO_EDGES) {
+        elements.push({
+          data: {
+            id: e.id,
+            source: e.source,
+            target: e.target,
+            label: e.label,
+            fabricAlias: e.fabricAlias || e.id,
+          },
+        });
+      }
+
+      if (topoCy) {
+        topoCy.destroy();
+        topoCy = null;
+      }
+
+      topoCy = cytoscape({
+        container: el,
+        elements,
+        layout: { name: "preset" },
+        minZoom: 0.4,
+        maxZoom: 2.5,
+        wheelSensitivity: 0.25,
+        style: [
+          {
+            selector: "node",
+            style: {
+              label: "data(label)",
+              "text-valign": "center",
+              "text-halign": "center",
+              "font-family": "ui-monospace, Menlo, monospace",
+              "font-size": 13,
+              "font-weight": 700,
+              color: "#e8eef7",
+              width: 78,
+              height: 44,
+              shape: "round-rectangle",
+              "border-width": 2,
+              "background-color": "#1a2332",
+              "border-color": "#5c6b82",
+              "text-wrap": "wrap",
+              "transition-property": "background-color, border-color, opacity, border-width",
+              "transition-duration": "0.15s",
+            },
+          },
+          {
+            selector: "node[kind = 'car-a']",
+            style: { "background-color": "#152030", "border-color": "#5b9fd4" },
+          },
+          {
+            selector: "node[kind = 'car-b']",
+            style: { "background-color": "#15241c", "border-color": "#6bcf8e" },
+          },
+          {
+            selector: "node[kind = 'car-d']",
+            style: { "background-color": "#241c12", "border-color": "#e0b44a" },
+          },
+          {
+            selector: "node[kind = 'yard']",
+            style: {
+              "background-color": "#2a1f1a",
+              "border-color": "#ff8c69",
+              shape: "round-rectangle",
+              width: 86,
+              height: 50,
+            },
+          },
+          {
+            selector: "node.dim",
+            style: { opacity: 0.28 },
+          },
+          {
+            selector: "node.on",
+            style: { "border-width": 3.5, "border-color": "#7dd3fc" },
+          },
+          {
+            selector: "node.picked",
+            style: { "border-width": 3.5, "border-color": "#34d399", "background-color": "#1a3328" },
+          },
+          {
+            selector: "node.fail",
+            style: { "border-color": "#f87171", opacity: 0.75 },
+          },
+          {
+            selector: "edge",
+            style: {
+              width: 2.2,
+              "curve-style": "bezier",
+              "target-arrow-shape": "triangle",
+              "target-arrow-color": "#4a5d78",
+              "line-color": "#4a5d78",
+              label: "data(label)",
+              "font-size": 10,
+              "font-family": "ui-monospace, Menlo, monospace",
+              color: "#8b9bb4",
+              "text-background-color": "#0a1018",
+              "text-background-opacity": 0.9,
+              "text-background-padding": 2,
+              "text-rotation": "autorotate",
+              "arrow-scale": 1.1,
+              opacity: 0.9,
+              "transition-property": "line-color, target-arrow-color, width, opacity",
+              "transition-duration": "0.15s",
+            },
+          },
+          {
+            selector: "edge.on",
+            style: {
+              width: 4,
+              "line-color": "#7dd3fc",
+              "target-arrow-color": "#7dd3fc",
+              color: "#7dd3fc",
+              "font-weight": 700,
+              opacity: 1,
+            },
+          },
+          {
+            selector: "edge.done",
+            style: {
+              width: 3,
+              "line-color": "#34d399",
+              "target-arrow-color": "#34d399",
+              color: "#6ee7b7",
+              opacity: 0.95,
+            },
+          },
+          {
+            selector: "edge.blocked",
+            style: {
+              width: 3,
+              "line-color": "#f87171",
+              "target-arrow-color": "#f87171",
+              "line-style": "dashed",
+              color: "#fca5a5",
+              opacity: 1,
+            },
+          },
+          {
+            selector: "edge.dim",
+            style: { opacity: 0.2 },
+          },
+        ],
+      });
+
+      topoCy.on("tap", "node", (evt) => {
+        const d = evt.target.data();
+        const info = document.getElementById("topoNodeInfo");
+        if (!info) return;
+        const kind =
+          d.kind === "yard" ? "Yard (junction — not a Class candidate)" :
+          d.kind === "car-a" ? "Car · Class Refrigerated" :
+          d.kind === "car-b" ? "Car · Class Normal" :
+          d.kind === "car-d" ? "Car · Class Docking" : d.kind;
+        info.innerHTML =
+          `<strong>${d.label}</strong> — ${kind}. ${d.sub || ""}. ` +
+          `Edges: zoom/pan the graph; step a scenario to highlight paths.`;
+      });
+
+      // fit once
+      topoCy.fit(undefined, 32);
+    }
+
+    function paintTopo(step) {
+      if (!topoCy) return;
+      const idMap = (displayId) => String(displayId || "").toLowerCase().replace(/-/g, "");
+      const onNodes = new Set(step.nodesOn || []);
+      const candFail = new Set(
+        (step.candidates || []).filter((c) => c.st === "fail").map((c) => idMap(c.id))
+      );
+      const candPick = new Set(
+        (step.candidates || []).filter((c) => c.st === "picked").map((c) => idMap(c.id))
+      );
+      const candHl = new Set(
+        (step.candidates || []).filter((c) => c.st === "pass" || c.st === "busy").map((c) => idMap(c.id))
+      );
+      const consistIds = new Set(
+        (step.consist || []).filter((c) => !c.ghost).map((c) => idMap(c.id))
+      );
+      const any =
+        onNodes.size ||
+        (step.edgesOn || []).length ||
+        (step.edgesDone || []).length ||
+        (step.candidates || []).length ||
+        consistIds.size;
+
+      topoCy.batch(() => {
+        topoCy.nodes().removeClass("on dim picked fail");
+        topoCy.edges().removeClass("on done blocked dim");
+
+        topoCy.nodes().forEach((n) => {
+          const id = n.id();
+          const involved =
+            onNodes.has(id) || consistIds.has(id) || candFail.has(id) || candPick.has(id) || candHl.has(id);
+          if (any && !involved) n.addClass("dim");
+          if (onNodes.has(id) || consistIds.has(id) || candHl.has(id)) n.addClass("on");
+          if (candPick.has(id)) n.addClass("picked");
+          if (candFail.has(id)) n.addClass("fail");
+        });
+
+        const edgeActive = new Set();
+        TOPO_EDGES.forEach((meta) => {
+          const st = edgeHighlightState(step, meta);
+          const edge = topoCy.getElementById(meta.id);
+          if (!edge || edge.empty()) return;
+          if (st !== "idle") {
+            edge.addClass(st);
+            edgeActive.add(meta.id);
+          }
+        });
+        if (any) {
+          topoCy.edges().forEach((e) => {
+            if (!edgeActive.has(e.id())) e.addClass("dim");
+          });
+        }
+      });
+    }
+
+    function yardPortPos(spec, side, track) {
+      const tracks = side === "in" ? spec.ins : spec.outs;
+      const idx = Math.max(0, tracks.indexOf(String(track)));
+      const n = Math.max(tracks.length, 1);
+      // Even vertical spacing; leave room for title
+      const top = spec.y + 52;
+      const bot = spec.y + spec.h - 24;
+      const y = n === 1 ? (top + bot) / 2 : top + (idx * (bot - top)) / (n - 1);
+      const x = side === "in" ? spec.x + 20 : spec.x + spec.w - 20;
+      return { x, y };
+    }
+
+    function carPortPos(car, side) {
+      return {
+        x: side === "out" ? car.x + car.w : car.x,
+        y: car.y + car.h / 2,
+      };
+    }
+
+    function findCar(id) {
+      return CAR_NODES.find((c) => c.id === id || c.key === id);
+    }
+
+    function endpoint(dev, track, side) {
+      dev = normalizeDevice(dev);
+      if (YARD_SPECS[dev]) return yardPortPos(YARD_SPECS[dev], side, track);
+      const car = findCar(dev);
+      if (car) return carPortPos(car, side === "in" ? "in" : "out");
+      return { x: 0, y: 0 };
+    }
+
+    /**
+     * Clean orthogonal cables.
+     * - default: H→V→H at viaX (or midpoint)
+     * - viaY: drop/rise to that Y, run horizontal, then into target
+     * - loopback: exit source to the RIGHT, under, enter target IN from the LEFT
+     *   (Y2 out6 → Y1 in5 — must not cut left through the Y1–Y2 gap)
+     */
+    function cablePath(a, b, opts) {
+      opts = opts || {};
+      const viaX = opts.viaX;
+      const viaY = opts.viaY;
+
+      if (opts.loopback) {
+        // a = OUT port (right of source), b = IN port (left of target)
+        // Explicit U-turn: right → down → under → up → into IN from left
+        const outRight = a.x + 56;
+        const leftOfIn = Math.min(b.x - 32, 150);
+        const underY = Math.max(a.y, b.y, 300) + 28; // below Y1 body
+        return (
+          `M ${a.x} ${a.y} ` +
+          `L ${outRight} ${a.y} ` +
+          `L ${outRight} ${underY} ` +
+          `L ${leftOfIn} ${underY} ` +
+          `L ${leftOfIn} ${b.y} ` +
+          `L ${b.x} ${b.y}`
+        );
+      }
+
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const sign = dx >= 0 ? 1 : -1;
+      const stub = Math.min(20, Math.max(12, Math.abs(dx) * 0.1));
+
+      if (viaY != null) {
+        const x1 = a.x + sign * stub;
+        const x2 = b.x - sign * stub;
+        return `M ${a.x} ${a.y} L ${x1} ${a.y} L ${x1} ${viaY} L ${x2} ${viaY} L ${x2} ${b.y} L ${b.x} ${b.y}`;
+      }
+
+      if (Math.abs(dy) < 6 && Math.abs(dx) > 12) {
+        return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+      }
+      if (Math.abs(dx) < 6) {
+        return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+      }
+
+      let mid = viaX != null ? viaX : a.x + dx * 0.5;
+      if (dx >= 0) mid = Math.max(a.x + stub, Math.min(b.x - stub, mid));
+      else mid = Math.min(a.x - stub, Math.max(b.x + stub, mid));
+      return `M ${a.x} ${a.y} L ${mid} ${a.y} L ${mid} ${b.y} L ${b.x} ${b.y}`;
+    }
+
+    function buildFabricBase() {
+      const svg = document.getElementById("fabricSvg");
+      if (!svg) return;
+      let html = "";
+      html += `<defs>
+        <filter id="labelBg" x="-8%" y="-40%" width="116%" height="180%">
+          <feFlood flood-color="#0e1520" flood-opacity="0.92" result="bg"/>
+          <feMerge><feMergeNode in="bg"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>`;
+      html += `<text x="480" y="16" text-anchor="middle" style="font-size:11px;fill:#5c6b82;font-family:system-ui,sans-serif">Port fabric — hop = in:Device:out · follow port numbers (no cable labels)</text>`;
+
+      // draw cables FIRST (under nodes) so boxes sit on top of line ends
+      for (const c of CABLES) {
+        const [fd, ft] = c.from;
+        const [td, tt] = c.to;
+        const a = endpoint(fd, ft, "out");
+        const b = endpoint(td, tt, "in");
+        const d = cablePath(a, b, { viaX: c.viaX, viaY: c.viaY, loopback: !!c.loopback });
+        html += `<path id="edge-${c.id}" class="edge idle" d="${d}" fill="none"/>`;
+      }
+
+      // cars
+      for (const c of CAR_NODES) {
+        html += `<rect id="node-${c.key}" class="node ${c.kind}" x="${c.x}" y="${c.y}" width="${c.w}" height="${c.h}" rx="8"/>`;
+        html += `<text id="label-${c.key}" x="${c.x + c.w / 2}" y="${c.y + c.h / 2 - 2}" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#e8eef7;font-family:ui-monospace,monospace">${c.label}</text>`;
+        html += `<text x="${c.x + c.w / 2}" y="${c.y + c.h / 2 + 12}" text-anchor="middle" style="font-size:9px;fill:#8b9bb4">${c.sub}</text>`;
+      }
+
+      // yards with ports
+      for (const name of Object.keys(YARD_SPECS)) {
+        const s = YARD_SPECS[name];
+        html += `<rect id="node-${s.id}" class="node yard" x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" rx="12"/>`;
+        html += `<text x="${s.x + s.w / 2}" y="${s.y + 20}" text-anchor="middle" style="font-size:14px;font-weight:700;fill:#ff8c69;font-family:system-ui,sans-serif">${s.label}</text>`;
+        html += `<text x="${s.x + 28}" y="${s.y + 36}" style="font-size:9px;fill:#8b9bb4">IN</text>`;
+        html += `<text x="${s.x + s.w - 40}" y="${s.y + 36}" style="font-size:9px;fill:#8b9bb4">OUT</text>`;
+
+        for (const t of s.ins) {
+          const p = yardPortPos(s, "in", t);
+          html += `<circle id="port-${s.id}-in-${t}" class="port-dot" cx="${p.x}" cy="${p.y}" r="10" fill="#1a2332" stroke="#94a3b8" stroke-width="1.5"/>`;
+          html += `<text x="${p.x}" y="${p.y + 3}" text-anchor="middle" style="font-size:10px;fill:#e8eef7;font-family:monospace;font-weight:700">${t}</text>`;
+        }
+        for (const t of s.outs) {
+          const p = yardPortPos(s, "out", t);
+          html += `<circle id="port-${s.id}-out-${t}" class="port-dot" cx="${p.x}" cy="${p.y}" r="10" fill="#1a2332" stroke="#94a3b8" stroke-width="1.5"/>`;
+          html += `<text x="${p.x}" y="${p.y + 3}" text-anchor="middle" style="font-size:10px;fill:#e8eef7;font-family:monospace;font-weight:700">${t}</text>`;
+        }
+        // legal internals — slight curve so 1→1 / 1→2 / 5→6 don't read as one line
+        let curveI = 0;
+        for (const [a, b] of s.legal) {
+          const p1 = yardPortPos(s, "in", a);
+          const p2 = yardPortPos(s, "out", b);
+          const bulge = (curveI++ - 1) * 10;
+          const mx = (p1.x + p2.x) / 2;
+          const my = (p1.y + p2.y) / 2 + bulge;
+          html += `<path id="xpt-${s.id}-${a}-${b}" class="xpt idle" d="M${p1.x + 11} ${p1.y} Q ${mx} ${my} ${p2.x - 11} ${p2.y}" fill="none" stroke="#3d4f6a" stroke-width="1.8"/>`;
+          html += `<text filter="url(#labelBg)" x="${mx}" y="${my - 6}" text-anchor="middle" style="font-size:8px;fill:#6b7c94;font-family:monospace">${a}→${b}</text>`;
+        }
+        for (const [a, b] of s.illegal) {
+          const p1 = yardPortPos(s, "in", a);
+          const p2 = yardPortPos(s, "out", b);
+          const mx = (p1.x + p2.x) / 2;
+          const my = (p1.y + p2.y) / 2 + 18;
+          html += `<path id="xpt-${s.id}-${a}-${b}" class="xpt illegal" d="M${p1.x + 11} ${p1.y} Q ${mx} ${my} ${p2.x - 11} ${p2.y}" fill="none" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.65"/>`;
+          html += `<text x="${mx}" y="${my + 4}" text-anchor="middle" style="font-size:8px;fill:#f87171">illegal ${a}→${b}</text>`;
+        }
+      }
+
+      html += `<text x="480" y="372" text-anchor="middle" style="font-size:10px;fill:#5c6b82;font-family:system-ui,sans-serif">Y1:1→N-04 · Y1:2→Y2:1 · Y1:3→N-08 · Y1:6→N-12 · Y2:5→N-04 · loopback Y2:6 right→under→Y1 in5 left · illegal 1→6</text>`;
+      svg.innerHTML = html;
+    }
+
+
+    function setXptState(device, inn, out, state) {
+      const dev = normalizeDevice(device);
+      const spec = YARD_SPECS[dev];
+      if (!spec) return;
+      const el = document.getElementById(`xpt-${spec.id}-${inn}-${out}`);
+      if (!el) return;
+      if (el.classList.contains("illegal") && state !== "blocked") {
+        // keep illegal styling unless explicitly on (shouldn't)
+        return;
+      }
+      el.setAttribute("stroke", state === "on" ? "#7dd3fc" : state === "done" ? "#34d399" : state === "blocked" ? "#f87171" : "#3d4f6a");
+      el.setAttribute("stroke-width", state === "on" ? "3.5" : state === "done" ? "2.5" : "1.5");
+      el.setAttribute("opacity", state === "idle" ? "0.7" : "1");
+      if (state === "on") el.style.filter = "drop-shadow(0 0 4px rgba(125,211,252,0.6))";
+      else el.style.filter = "";
+    }
+
+    function setPortState(device, side, track, state) {
+      const dev = normalizeDevice(device);
+      const spec = YARD_SPECS[dev];
+      let el = null;
+      if (spec) el = document.getElementById(`port-${spec.id}-${side}-${track}`);
+      if (!el) return;
+      el.setAttribute("stroke", state === "on" ? "#7dd3fc" : state === "done" ? "#34d399" : "#94a3b8");
+      el.setAttribute("stroke-width", state === "on" || state === "done" ? "2.5" : "1.5");
+      el.setAttribute("fill", state === "on" ? "#0c2a3a" : "#1a2332");
+    }
+
+    function paintFabric(step) {
+      // reset yards
+      for (const name of Object.keys(YARD_SPECS)) {
+        const s = YARD_SPECS[name];
+        for (const [a, b] of s.legal) setXptState(name, a, b, "idle");
+        for (const t of s.ins) setPortState(name, "in", t, "idle");
+        for (const t of s.outs) setPortState(name, "out", t, "idle");
+        const box = document.getElementById("node-" + s.id);
+        if (box) {
+          box.className = "node yard";
+          box.style.opacity = "1";
+        }
+      }
+      for (const c of CAR_NODES) {
+        const box = document.getElementById("node-" + c.key);
+        if (box) {
+          box.className = "node " + c.kind;
+          box.style.opacity = "1";
+        }
+      }
+      for (const c of CABLES) {
+        const el = document.getElementById("edge-" + c.id);
+        if (el) {
+          el.setAttribute("class", "edge idle");
+          el.style.filter = "";
+        }
+      }
+
+      // Hop list drives path: internals + cables between hops (and edges* lists)
+      const hl = hopToHighlights(step.hops, step.hopsActive);
+      const nodeHits = new Set(step.nodesOn || []);
+
+      hl.internalOn.forEach((x) => {
+        setXptState(x.device, x.inn, x.out, x.state);
+        const s = YARD_SPECS[normalizeDevice(x.device)];
+        if (s) nodeHits.add(s.id);
+      });
+      hl.portOn.forEach((x) => setPortState(x.device, x.side, x.track, x.state));
+
+      function styleCable(id, state) {
+        const el = document.getElementById("edge-" + id);
+        if (!el) return;
+        const cls =
+          state === "blocked" ? "edge blocked" :
+          state === "on" ? "edge on" :
+          state === "done" ? "edge done" : "edge idle";
+        el.setAttribute("class", cls);
+      }
+
+      // Merge hop-derived + explicit lists; priority blocked > on > done
+      const cableFinal = {};
+      const rank = { done: 1, on: 2, blocked: 3 };
+      function bump(id, state) {
+        if (!id || !state) return;
+        if (!cableFinal[id] || rank[state] > rank[cableFinal[id]]) cableFinal[id] = state;
+      }
+      (step.edgesDone || []).forEach((id) => bump(id, "done"));
+      (step.edgesOn || []).forEach((id) => bump(id, "on"));
+      (step.edgesBlocked || []).forEach((id) => bump(id, "blocked"));
+      hl.cableOn.forEach((x) => {
+        if ((step.edgesBlocked || []).includes(x.id) && x.state !== "blocked") {
+          // keep blocked if explicitly listed, unless hop says blocked too
+        }
+        bump(x.id, x.state);
+      });
+      // If blocked list wins over hop-derived on for teaching fails:
+      (step.edgesBlocked || []).forEach((id) => { cableFinal[id] = "blocked"; });
+
+      Object.keys(cableFinal).forEach((id) => styleCable(id, cableFinal[id]));
+
+      // dim uninvolved cars/yards
+      const involved = new Set(step.nodesOn || []);
+      hl.internalOn.forEach((x) => {
+        const s = YARD_SPECS[normalizeDevice(x.device)];
+        if (s) involved.add(s.id);
+      });
+      (step.consist || []).forEach((c) => {
+        if (c.ghost) return;
+        const id = String(c.id).toLowerCase().replace(/-/g, "");
+        if (id === "y1") involved.add("y1");
+        else if (id === "y2") involved.add("y2");
+        else involved.add(id);
+      });
+      if (involved.size) {
+        for (const c of CAR_NODES) {
+          if (!involved.has(c.key) && !involved.has(c.id.toLowerCase().replace(/-/g, ""))) {
+            const box = document.getElementById("node-" + c.key);
+            if (box) box.style.opacity = "0.3";
+          }
+        }
+        for (const name of Object.keys(YARD_SPECS)) {
+          const s = YARD_SPECS[name];
+          if (!involved.has(s.id)) {
+            const box = document.getElementById("node-" + s.id);
+            if (box) box.style.opacity = "0.35";
+          }
+        }
+      }
+
+      // synthesize cytoscape edge lists from hops when step only has hops
+      const synth = { edgesOn: [...(step.edgesOn || [])], edgesDone: [...(step.edgesDone || [])], edgesBlocked: [...(step.edgesBlocked || [])] };
+      hl.cableOn.forEach((x) => {
+        if (x.state === "on" && !synth.edgesOn.includes(x.id)) synth.edgesOn.push(x.id);
+        if (x.state === "done" && !synth.edgesDone.includes(x.id)) synth.edgesDone.push(x.id);
+      });
+      paintTopo(Object.assign({}, step, synth));
+    }
+
+    function selectScenario(i) {
+      if (i < 0 || i >= SCENARIOS.length) return;
+      scenarioIdx = i;
+      stepIdx = 0;
+      renderScenarios();
+      render();
+    }
+
+    function fillScenarioTabs(tabsEl) {
+      if (!tabsEl) return;
+      tabsEl.innerHTML = "";
+      SCENARIOS.forEach((sc, i) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = sc.title;
+        b.className = i === scenarioIdx ? "active" : "";
+        b.setAttribute("role", "tab");
+        b.setAttribute("aria-selected", i === scenarioIdx ? "true" : "false");
+        b.title = sc.blurb;
+        b.onclick = () => selectScenario(i);
+        tabsEl.appendChild(b);
+      });
+    }
+
+    function renderScenarios() {
+      fillScenarioTabs(document.getElementById("scenarioTabs"));
+      fillScenarioTabs(document.getElementById("scenarioTabsWalk"));
+
+      const sel = document.getElementById("scenarioSelect");
+      if (sel) {
+        if (sel.options.length !== SCENARIOS.length) {
+          sel.innerHTML = "";
+          SCENARIOS.forEach((sc, i) => {
+            const opt = document.createElement("option");
+            opt.value = String(i);
+            opt.textContent = sc.title + " — " + (sc.blurb || "").slice(0, 60) + (sc.blurb && sc.blurb.length > 60 ? "…" : "");
+            sel.appendChild(opt);
+          });
+          sel.onchange = () => selectScenario(parseInt(sel.value, 10));
+        }
+        sel.value = String(scenarioIdx);
+      }
+
+      const blurb = document.getElementById("scenarioBlurb");
+      if (blurb) {
+        const sc = currentScenario();
+        blurb.innerHTML =
+          "<strong>" + sc.title + ":</strong> " + sc.blurb +
+          " <span style='color:var(--faint)'>(" + SCENARIOS.length + " scenarios total)</span>";
+      }
+      const wt = document.getElementById("walkTitle");
+      if (wt) wt.textContent = currentScenario().title;
+    }
+
+    function render() {
+      const steps = currentSteps();
+      const s = steps[stepIdx];
+      const sc = currentScenario();
+
+      document.getElementById("stepCounter").textContent =
+        `Step ${stepIdx + 1} / ${steps.length}`;
+      const stickyTitle = document.getElementById("stickyTitle");
+      const stickyCounter = document.getElementById("stickyCounter");
+      if (stickyTitle) stickyTitle.textContent = sc.title + " · " + s.title;
+      if (stickyCounter) stickyCounter.textContent = `Step ${stepIdx + 1} / ${steps.length} · ${s.meta || ""}`;
+      document.getElementById("stepMeta").textContent = s.meta;
+      document.getElementById("stepTitle").textContent = s.title;
+      document.getElementById("stepBody").innerHTML = s.body;
+      document.getElementById("vizCtx").textContent = s.ctx;
+      document.getElementById("vizCtx").className = "ctx" + (s.ctx === "(empty)" ? " empty" : "");
+      document.getElementById("vizNotes").innerHTML = s.notes;
+
+      const pill = document.getElementById("phasePill");
+      const phaseMap = {
+        assembler: ["assembler", "Assembler"],
+        coupler: ["coupler", "Coupler A*"],
+        system: ["system", "System / sticky"],
+        fail: ["fail", "Failure report"],
+      };
+      const [pc, pl] = phaseMap[s.phase] || phaseMap.assembler;
+      pill.className = "phase-pill " + pc;
+      pill.textContent = pl;
+
+      // legs
+      const legsRow = document.getElementById("legsRow");
+      legsRow.innerHTML = "";
+      (sc.legs || []).forEach((name, i) => {
+        const el = document.createElement("span");
+        el.className = "leg-pill";
+        el.textContent = name;
+        if (s.leg === i) el.classList.add(s.phase === "fail" ? "fail" : "active");
+        else if (typeof s.leg === "number" && s.leg > i) el.classList.add("done");
+        legsRow.appendChild(el);
+      });
+
+      // consist — Class Cars + Yards on the reserved path
+      const consist = document.getElementById("vizConsist");
+      consist.innerHTML = "";
+      if (!s.consist.length) {
+        consist.innerHTML = "<span style='color:var(--faint);font-size:0.85rem'>(empty — no Cars or Yards yet)</span>";
+      } else {
+        s.consist.forEach((c, i) => {
+          if (i) {
+            const sp = document.createElement("span");
+            sp.textContent = "—";
+            sp.style.color = "var(--faint)";
+            consist.appendChild(sp);
+          }
+          const chip = document.createElement("span");
+          const isYard = c.cls === "yard";
+          chip.className =
+            "car-chip " +
+            c.cls +
+            (c.ghost ? " ghost" : "") +
+            (c.locked ? " locked" : "") +
+            (c.active ? " on-path" : "");
+          const idSpan = document.createElement("span");
+          idSpan.className = "chip-id";
+          idSpan.textContent = c.id;
+          chip.appendChild(idSpan);
+          if (c.hop) {
+            const hopSpan = document.createElement("span");
+            hopSpan.className = "chip-hop";
+            hopSpan.textContent = c.hop;
+            chip.appendChild(hopSpan);
+          } else if (isYard && !c.ghost) {
+            const hopSpan = document.createElement("span");
+            hopSpan.className = "chip-hop";
+            hopSpan.textContent = "yard";
+            chip.appendChild(hopSpan);
+          } else if (!isYard && c.locked) {
+            const hopSpan = document.createElement("span");
+            hopSpan.className = "chip-hop";
+            hopSpan.textContent = "car";
+            chip.appendChild(hopSpan);
+          }
+          chip.title = isYard
+            ? (c.hop ? `Yard visit ${c.hop}` : "Yard on path")
+            : (c.ghost ? "Slot not bound yet" : "Claimed Class Car");
+          consist.appendChild(chip);
+        });
+      }
+
+      // candidates — show Class + prefilter vs accept stage
+      const CLASS_OF = {
+        "R-03": "Refrigerated", "R-17": "Refrigerated", "R-22": "Refrigerated",
+        "N-04": "Normal", "N-08": "Normal", "N-12": "Normal",
+        "D-02": "Docking", "D-11": "Docking",
+        "Y1": "Yard", "Y2": "Yard",
+      };
+      const CAR_META = {
+        "N-04": { seats: 8 },
+        "N-08": { seats: 4 },
+        "N-12": { seats: 12 },
+      };
+      const cands = document.getElementById("vizCands");
+      const candHint = document.getElementById("candLegHint");
+      cands.innerHTML = "";
+      if (!s.candidates || !s.candidates.length) {
+        cands.innerHTML = "<span style='color:var(--faint);font-size:0.85rem'>(no Car checks this step)</span>";
+        candHint.textContent = "";
+      } else {
+        const stages = [...new Set(s.candidates.map((c) => c.stage || "prefilter"))];
+        const classes = [...new Set(s.candidates.map((c) => CLASS_OF[c.id] || "?"))];
+        candHint.innerHTML =
+          "<strong>Class " + classes.join(" / ") + " Cars.</strong> " +
+          (stages.includes("prefilter") && !stages.includes("accept")
+            ? "<span style='color:var(--class-a)'>prefilter</span> only (Assembler, before A*) — path stamps / track routing not applied yet."
+            : stages.includes("accept")
+              ? "<span style='color:var(--yard)'>accept</span> = full Inspector at Coupler goal (path Context + track routing)."
+              : "Mix of prefilter / accept.");
+        s.candidates.forEach((c) => {
+          const row = document.createElement("div");
+          row.className = "cand " + c.st;
+          const cls = CLASS_OF[c.id] || "Car";
+          const stage = c.stage || (c.st === "picked" ? "bind" : "prefilter");
+          const meta = CAR_META[c.id];
+          const seatNote = meta ? ` · ${meta.seats} seats` : "";
+          row.innerHTML =
+            `<span class="cid">${c.id}</span>` +
+            `<span class="st ${c.st}">${c.st}</span>` +
+            `<span class="stage ${stage}">${stage}</span>` +
+            `<span class="why"><strong>${cls}</strong>${seatNote} — ${c.why}</span>`;
+          cands.appendChild(row);
+        });
+      }
+
+
+      // hops
+      const hops = document.getElementById("vizHops");
+      hops.innerHTML = "";
+      if (!s.hops.length) {
+        hops.innerHTML = "<span style='color:var(--faint)'>(no hops yet)</span>";
+      } else {
+        s.hops.forEach((h, i) => {
+          if (i) {
+            const a = document.createElement("span");
+            a.className = "hop-arrow";
+            a.textContent = "→";
+            hops.appendChild(a);
+          }
+          const el = document.createElement("span");
+          const active = s.hopsActive === i;
+          const past = s.hopsActive >= 0 && i < s.hopsActive;
+          el.className = "hop" + (h === "…" || h.startsWith("✗") ? " dim" : "");
+          if (active) el.style.boxShadow = "0 0 0 1px var(--accent)";
+          if (past) el.style.opacity = "0.7";
+          // Show hop + decoded in→out for yards
+          const ph = typeof parseHop === "function" ? parseHop(h) : null;
+          if (ph && (ph.device.toUpperCase().startsWith("Y") || /^Y\d/i.test(ph.device))) {
+            el.innerHTML = `${h}<br><span style="font-size:0.65rem;opacity:0.85">IN${ph.inn}→OUT${ph.out}</span>`;
+          } else {
+            el.textContent = h;
+          }
+          hops.appendChild(el);
+        });
+      }
+
+      // failure
+      const fb = document.getElementById("vizFailure");
+      if (s.failure) {
+        fb.style.display = "block";
+        fb.textContent = s.failure;
+      } else {
+        fb.style.display = "none";
+        fb.textContent = "";
+      }
+
+      paintFabric(s);
+
+      // dots
+      const dots = document.getElementById("dots");
+      dots.innerHTML = "";
+      steps.forEach((_, i) => {
+        const d = document.createElement("span");
+        d.className = "dot" + (i === stepIdx ? " on" : i < stepIdx ? " done" : "");
+        dots.appendChild(d);
+      });
+
+      const atStart = stepIdx === 0;
+      const atEnd = stepIdx === steps.length - 1;
+      ["btnPrev", "btnPrevFloat", "btnPrevFabric"].forEach((id) => {
+        const b = document.getElementById(id);
+        if (b) b.disabled = atStart;
+      });
+      ["btnNext", "btnNextFloat", "btnNextFabric"].forEach((id) => {
+        const b = document.getElementById(id);
+        if (b) b.disabled = atEnd;
+      });
+    }
+
+    function stepPrev() {
+      if (stepIdx > 0) { stepIdx--; render(); }
+    }
+    function stepNext() {
+      if (stepIdx < currentSteps().length - 1) { stepIdx++; render(); }
+    }
+    function stepReset() {
+      stepIdx = 0;
+      render();
+    }
+
+    [
+      ["btnPrev", stepPrev],
+      ["btnNext", stepNext],
+      ["btnReset", stepReset],
+      ["btnPrevFloat", stepPrev],
+      ["btnNextFloat", stepNext],
+      ["btnResetFloat", stepReset],
+      ["btnPrevFabric", stepPrev],
+      ["btnNextFabric", stepNext],
+    ].forEach(([id, fn]) => {
+      const el = document.getElementById(id);
+      if (el) el.onclick = fn;
+    });
+
+    function isTypingTarget(el) {
+      if (!el || !el.tagName) return false;
+      const t = el.tagName.toLowerCase();
+      if (t === "input" || t === "textarea" || t === "select") return true;
+      if (el.isContentEditable) return true;
+      return false;
+    }
+
+    // Global keys so you can step while looking at the fabric (no focus required)
+    document.addEventListener("keydown", (e) => {
+      if (isTypingTarget(e.target)) return;
+      const nextKeys = e.key === "ArrowRight" || e.key === "l" || e.key === "]";
+      const prevKeys = e.key === "ArrowLeft" || e.key === "h" || e.key === "[";
+      if (nextKeys) {
+        e.preventDefault();
+        stepNext();
+      } else if (prevKeys) {
+        e.preventDefault();
+        stepPrev();
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        stepReset();
+      }
+    });
+
+    // Show floating nav while topology map OR walk (incl. fabric SVG) is on screen
+    (function setupFloatNav() {
+      const floatNav = document.getElementById("walkFloatNav");
+      const targets = ["walk", "topoMap", "walkthrough"]
+        .map((id) => document.getElementById(id))
+        .filter(Boolean);
+      if (!floatNav || !targets.length) return;
+      if (typeof IntersectionObserver === "undefined") {
+        floatNav.hidden = false;
+        return;
+      }
+      const visible = new Set();
+      const io = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((en) => {
+            if (en.isIntersecting) visible.add(en.target);
+            else visible.delete(en.target);
+          });
+          floatNav.hidden = visible.size === 0;
+        },
+        { root: null, threshold: 0.02, rootMargin: "80px 0px" }
+      );
+      targets.forEach((el) => io.observe(el));
+    })();
+
+    // deep link ?scenario=simple|multiyard|loopback|prefilter|nosol|sticky
+    // aliases: inspector → prefilter; ctxloop → multiyard
+    try {
+      const params = new URLSearchParams(location.search);
+      let want = params.get("scenario");
+      if (want === "inspector") want = "prefilter";
+      if (want === "ctxloop") want = "multiyard";
+      if (want) {
+        const i = SCENARIOS.findIndex((s) => s.id === want);
+        if (i >= 0) scenarioIdx = i;
+      }
+    } catch (e) { /* ignore */ }
+
+    // Tabs first so scenarios always appear even if graph libs fail
+    try { renderScenarios(); } catch (e) { console.error(e); }
+    try { buildFabricBase(); } catch (e) { console.error(e); }
+    try { buildTopoGraph(); } catch (e) { console.error(e); }
+    try { render(); } catch (e) { console.error(e); }
+  </script>
+</body>
+</html>

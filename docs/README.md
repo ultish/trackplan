@@ -7,6 +7,7 @@
 | Order | Doc | Role |
 |-------|-----|------|
 | **1** | **[BUILD_SPEC.md](./BUILD_SPEC.md)** | **Canonical** model + engine decisions (keep current) |
+| **1b** | **[ENTITY_DIAGRAMS.md](./ENTITY_DIAGRAMS.md)** | Mermaid class / relationship diagrams for the Station model |
 | **2** | **[SPEC.md](./SPEC.md)** | Broader handoff; some sections still older Class/Car wording |
 | **3** | **[booking-assembler-design.html](./booking-assembler-design.html)** | Interactive walkthroughs (rename pass later) |
 | — | **[FIXTURE_STUDIO.md](./FIXTURE_STUDIO.md)** | Golden authoring UI design |

@@ -692,7 +692,8 @@
       background: rgba(91,159,212,0.2);
       color: var(--class-a);
     }
-    .cand .stage.accept {
+    .cand .stage.accept,
+    .cand .stage.inspect {
       background: rgba(255,140,105,0.18);
       color: var(--yard);
     }
@@ -930,7 +931,7 @@
   <div class="shell">
     <nav class="toc" aria-label="Table of contents">
       <div class="brand">Trackplan</div>
-      <div class="brand-sub">Stations · Links · interactive (vocab pass later)</div>
+      <div class="brand-sub">Stations · Links · Assembler + Coupler</div>
       <div class="toc-section">Start</div>
       <a href="#intro">Why this doc</a>
       <a href="#terminology">Terminology</a>
@@ -941,7 +942,7 @@
       <a href="#layers">Outer vs inner</a>
       <a href="#assembler">Assembler</a>
       <a href="#astar">Coupler (A* / BFS)</a>
-      <a href="#yards">Yards &amp; tracks</a>
+      <a href="#yards">Tracks, Links &amp; transparent</a>
       <a href="#heuristics">Heuristics</a>
       <div class="toc-section">Ops</div>
       <a href="#performance">Performance</a>
@@ -956,26 +957,40 @@
     <main>
       <h1>Trackplan — design notes</h1>
       <p class="lede">
-        <strong>Trackplan</strong> places ordered booking legs onto a network of
-        <strong>Stations</strong> (see BUILD_SPEC for StationType / Tasking).
-        This HTML still uses older Class/Car/Yard labels in places — narrative only until a rename pass.
+        <strong>Trackplan</strong> places ordered Booking legs onto a network of
+        <strong>Stations</strong> (<strong>StationTypes</strong>) connected by
+        <strong>Links</strong> on <strong>Tracks</strong>. Engines:
+        <strong>Assembler</strong> (outer legs) + <strong>Coupler</strong> (inner path).
+        User-visible plan path = <strong>Route</strong>. Canonical model:
+        <code>docs/BUILD_SPEC.md</code>.
       </p>
 
       <h2 id="intro">Why this doc</h2>
       <p>
-        This captures interactive walkthroughs for <strong>Trackplan</strong>: vocabulary,
-        the two-layer algorithm (Assembler + Coupler), performance, failure
-        reporting, and how we stop the yard mesh from exploding.
+        Interactive walkthroughs for <strong>Trackplan</strong>: Station vocabulary,
+        Assembler + Coupler, Prefilter vs Inspector, performance, failure
+        reporting, and how transparent path stations (e.g. switches) fill the fabric
+        without becoming demand legs.
       </p>
       <div class="callout">
         <strong>Format:</strong> HTML for interactive diagrams and walkthroughs.
         Index: <code>docs/README.md</code>. Deep-link a scenario with
-        <code>?scenario=simple|multiyard|loopback|prefilter|nosol|sticky</code>.
+        <code>?scenario=simple|multiyard|loopback|prefilter|nosol|sticky</code>
+        (scenario ids stable). Primary contracts: <code>docs/BUILD_SPEC.md</code>.
+      </div>
+      <div class="callout warn">
+        <strong>Toy narrative:</strong> scenarios simplify full Task / time-slice /
+        whole-booking commit mechanics from BUILD_SPEC. They teach Assembler vs Coupler
+        and Prefilter vs <code>Inspector.inspect</code>, not every engine edge case.
       </div>
 
       <!-- ========== TERMINOLOGY ========== -->
-      <h2 id="terminology">Terminology (rail model only)</h2>
-      <p>Use these words in product, code, and docs. Avoid domain synonyms unless bridging to an older system.</p>
+      <h2 id="terminology">Terminology (canonical Station model)</h2>
+      <p>
+        Use these words in product, code, and docs. Bridge from older names only when needed:
+        Class/Car → StationType/Station · Yard → transparent StationType · Cable → Link · Port → Track ·
+        Consist (old project name) → <strong>Trackplan</strong>.
+      </p>
 
       <table>
         <thead>
@@ -983,117 +998,134 @@
         </thead>
         <tbody>
           <tr>
-            <td><strong>Class</strong></td>
-            <td>A catalog role or car-kind you can request (e.g. Refrigerated, Normal, Docking). Many Cars implement one Class.</td>
+            <td><strong>StationType</strong></td>
+            <td>Catalog type: schemas, inspector, heuristics, <code>transparent?</code> (e.g. Refrigerated, Normal, Docking, Switch). Many Stations implement one StationType.</td>
           </tr>
           <tr>
-            <td><strong>Car</strong></td>
-            <td>One concrete unit of a Class (identity you can claim).</td>
+            <td><strong>Station</strong></td>
+            <td>Instance of a StationType (id you bind): setup, tasking, liveData, tracks. Toy ids: R-17, N-04, Y1 (Y1 = Switch Station).</td>
+          </tr>
+          <tr>
+            <td><strong>transparent</strong></td>
+            <td>StationType omitted from Booking demand; Coupler path filler only (e.g. switch). Users do not author legs or requests for transparent types (v1).</td>
+          </tr>
+          <tr>
+            <td><strong>Track</strong></td>
+            <td>Named IN or OUT endpoint on a StationType / Station. Ref: <code>(stationId, in|out, trackId)</code>.</td>
+          </tr>
+          <tr>
+            <td><strong>Link</strong></td>
+            <td>Physical topology edge: Station A OUT track → Station B IN track. Coupler may traverse only online Links.</td>
           </tr>
           <tr>
             <td><strong>Setup</strong></td>
-            <td>Costly mode on a Car or Yard. Changing setup takes time and may drop live traffic. Prefer reuse / piggyback. Each Class has its own allowed Setups.</td>
+            <td>Semi-static station properties (schema on type, values on station). Not booking-driven; Assembler never mutates setup.</td>
+          </tr>
+          <tr>
+            <td><strong>Task / Tasking</strong></td>
+            <td><strong>Task</strong> = one use of a station (input, output, <strong>context</strong>, taskingConfiguration, bookingIds). <strong>Tasking</strong> = Task[] on a Station — live/planned-live source of truth.</td>
+          </tr>
+          <tr>
+            <td><strong>Request</strong></td>
+            <td>User demand on a Booking leg (object shaped by StationType.requestSchema).</td>
+          </tr>
+          <tr>
+            <td><strong>Prefilter</strong></td>
+            <td>Cheap screen before Coupler: <code>canUse(setup, request, liveData)</code> — no Task, no path context. Safe drops only (path could never fix).</td>
           </tr>
           <tr>
             <td><strong>Inspector</strong></td>
             <td>
-              Per-Class rules (unique implementation) that answer:
-              <em>“Does this Car — with its live config/Setup — satisfy leg request X (and Context)?”</em>
-              Catalog Setup names the mode; the Inspector <strong>proves fitness</strong> of a concrete Car for that request.
-              Also called a <em>clearance check</em> in ops prose.
+              Per-StationType: <code>inspect(setup, tasking, request, liveData) → Task[] | Failure</code>.
+              Full assign when Coupler peels a candidate Task (path context already seeded on the Task).
             </td>
           </tr>
           <tr>
             <td><strong>Booking</strong></td>
-            <td>One end-to-end reservation: ordered legs, bound Cars, route hops, context, sticky snapshot.</td>
+            <td>Demand legs + plan: bindings, route, failure, sticky. Commit is whole-Booking only.</td>
           </tr>
           <tr>
             <td><strong>Leg</strong></td>
-            <td>One line on a Booking: required <code>(Class, Setup)</code> plus any Class-specific request fields the Inspector understands. Fulfilling a leg usually adds one Car to the consist.</td>
+            <td>One demand line: non-transparent <code>stationTypeId</code> + <code>request</code>. Transparent types never appear as legs.</td>
           </tr>
           <tr>
-            <td><strong>Consist</strong></td>
-            <td>The train so far — ordered Cars already claimed for this Booking. Length grows: 1 → 2 → 3 …</td>
+            <td><strong>Route / Hop / Binding</strong></td>
+            <td><strong>Route</strong> = full hop path after resolve (user-visible plan). <strong>Hop</strong> = <code>in:station:out</code>. <strong>Binding</strong> = this Booking uses this Station (leg or path).</td>
           </tr>
           <tr>
             <td><strong>Context</strong></td>
             <td>
-              Accumulated facts that later <strong>Inspectors</strong> (and path rules) consume.
-              Sources are not only bound Class Cars — <strong>Yards (and other path devices) can publish facts when visited</strong>
-              (e.g. a clearance stamp from Yard 2). Missing path-context can force detours/loopbacks even when a shorter cable to the next Car exists.
+              Per-<strong>Task</strong> map of path/comms facts (accumulates hop to hop). Inspectors write/extend keys.
+              Transparent stations on the path can publish facts (e.g. Y2 stamp) that later inspect needs.
             </td>
           </tr>
           <tr>
-            <td><strong>Yard</strong></td>
-            <td>Junction with numbered <strong>in / out tracks</strong> and a legal in→out map (not always full N×M).</td>
-          </tr>
-          <tr>
-            <td><strong>Track / port</strong></td>
-            <td>Attachment point: <code>(device, in|out, track_id)</code>.</td>
-          </tr>
-          <tr>
-            <td><strong>Hop</strong></td>
-            <td>One visit: <code>in:device:out</code> (enter on track <em>in</em>, leave on track <em>out</em>).</td>
-          </tr>
-          <tr>
-            <td><strong>Route</strong></td>
-            <td>Ordered hop list realizing couplings for the Booking.</td>
-          </tr>
-          <tr>
-            <td><strong>Cable</strong></td>
-            <td>External edge from one device’s out track to another’s in track.</td>
-          </tr>
-          <tr>
             <td><strong>Checkpoint</strong></td>
-            <td>Class policy: once a Car of that Class is claimed, other Cars of that Class are not tried (class-once).</td>
+            <td>StationType heuristic: after bind, do not try other stations of that type (type-once). Timing: DEFAULT after next non-transparent leg succeeds.</td>
           </tr>
           <tr>
             <td><strong>Assembler</strong></td>
-            <td>Outer engine: walks legs, picks Cars, holds context, calls Coupler, checkpoints, sticky, failures.</td>
+            <td>Outer engine: legs, Prefilter candidates, agenda/alts, checkpoints, sticky, incremental re-resolve, whole-Booking commit.</td>
           </tr>
           <tr>
             <td><strong>Coupler</strong></td>
-            <td>Inner engine: bounded multi-sink BFS/A* on the port graph through Yards for one coupling segment.</td>
+            <td>Inner engine: path between leg endpoints on Stations + Tracks + Links; edgeCost + NeighborRank; transparent path fillers.</td>
           </tr>
           <tr>
             <td><strong>Oracle</strong></td>
-            <td>Precomputed reachability / distances on ports for fail-fast and A* heuristics.</td>
+            <td>Precomputed hop-count reachability on the online Link graph for A* <code>h</code> and goal prune. Rebuild on topology change, not tasking.</td>
           </tr>
           <tr>
-            <td><strong>Fingerprint / hopeful token</strong></td>
-            <td>Version of world inputs so we can reuse SAT/UNSAT without re-search when nothing relevant changed.</td>
+            <td><strong>Agenda</strong></td>
+            <td>Assembler-owned sorted targets (e.g. finishes on next type); peel → Coupler path → inspect when peeled; keep alts if later leg fails.</td>
+          </tr>
+          <tr>
+            <td><strong>Sticky / hopeful token</strong></td>
+            <td>Cache SAT plan or UNSAT report under demand + relevant world epochs; reuse when nothing hopeful changed.</td>
           </tr>
         </tbody>
       </table>
 
-      <h3>Setup vs Inspector</h3>
+      <h3>Setup vs Request vs Prefilter vs Inspector</h3>
       <table>
-        <thead><tr><th></th><th>Setup</th><th>Inspector</th></tr></thead>
+        <thead><tr><th></th><th>Setup</th><th>Request</th><th>Prefilter</th><th>Inspector</th></tr></thead>
         <tbody>
           <tr>
             <td><strong>What</strong></td>
-            <td>Named mode / configuration a Class can be in</td>
-            <td>Per-Class implementation: does Car + live config satisfy <em>this</em> request?</td>
+            <td>Semi-static station props (human / non-booking)</td>
+            <td>Booking leg demand fields</td>
+            <td>Cheap “could this station ever work?”</td>
+            <td>Full assign: provisional Task → full Task[]</td>
           </tr>
           <tr>
-            <td><strong>Shape</strong></td>
-            <td>Data (catalog of modes)</td>
-            <td>Code / rules unique to the Class</td>
+            <td><strong>Inputs</strong></td>
+            <td>On Station; schema on StationType</td>
+            <td>On Leg</td>
+            <td>setup, request, liveData</td>
+            <td>setup, tasking (+ candidate Task), request, liveData</td>
           </tr>
           <tr>
             <td><strong>Example</strong></td>
-            <td><code>4N-cabinets</code>, <code>2-seats</code></td>
-            <td>“RefrigeratedInspector: request wants 4N and band L; Car R-17 is 4N but band M → reject”</td>
+            <td>firmware, fixed mode flags</td>
+            <td><code>min_seats: 6</code>, band L</td>
+            <td>N-08 seats &lt; 6 → drop (path never adds seats)</td>
+            <td>Arrive N-04 with path context; stamp missing → fail; after Y2 stamp → ok</td>
           </tr>
           <tr>
-            <td><strong>When run</strong></td>
-            <td>Referenced on the leg; cost of changing Setup is ranked later</td>
-            <td>On each candidate Car during Assembler candidate build</td>
+            <td><strong>When</strong></td>
+            <td>World config; rare changes</td>
+            <td>Booking authoring</td>
+            <td>Assembler, before Coupler goals</td>
+            <td>Coupler / agenda peel at candidate station</td>
           </tr>
         </tbody>
       </table>
 
-      <h3>Yard type sketches</h3>
+      <h3>Transparent path stations (legalPairs sketches)</h3>
+      <p style="font-size:0.9rem;color:var(--muted);max-width:none">
+        No separate Yard entity. Switches and similar junctions are <strong>transparent StationTypes</strong>
+        with IN/OUT tracks and legal in→out pairs. Coupler fills them between demand Stations.
+      </p>
       <div class="two-col">
         <div class="mini-card">
           <h4>Direct</h4>
@@ -1116,29 +1148,31 @@
       <!-- ========== BIG PICTURE ========== -->
       <h2 id="big-picture">Big picture</h2>
       <p>
-        A Booking is not “visit places on a map.” It is <strong>assembling a longer train</strong>:
-        each leg claims a Car of the required Class/Setup, optionally through Yards,
-        and publishes facts that constrain the next leg.
+        A Booking is ordered <strong>demand legs</strong> (non-transparent StationTypes only).
+        Assembler binds Stations for each leg; Coupler fills transparent path stations
+        (switches) and Links between them. After resolve the user may see a full
+        <strong>Route</strong>: <code>R-17 → Y1 → N-04 → D-02</code>. Tasks on stations
+        carry path <strong>context</strong> that later legs may require.
       </p>
 
       <div class="mermaid">
 flowchart TB
-  subgraph booking["Booking request"]
-    L1["Leg1: Class Refrigerated · Setup 4N"]
-    L2["Leg2: Class Normal · Setup 2 seats"]
-    L3["Leg3: Class Docking · Setup 1 connector"]
+  subgraph booking["Booking demand"]
+    L1["Leg1: StationType Refrigerated · request 4N"]
+    L2["Leg2: StationType Normal · request min_seats"]
+    L3["Leg3: StationType Docking · request connector"]
     L1 --> L2 --> L3
   end
 
   subgraph outer["Assembler — outer"]
-    P1["Pick Car · update Context · Checkpoint?"]
-    P2["Pick Car · update Context · Checkpoint?"]
-    P3["Pick Car · done"]
+    P1["Bind Station · Task context · Checkpoint?"]
+    P2["Bind Station · Task context · Checkpoint?"]
+    P3["Bind Station · whole-Booking commit"]
   end
 
   subgraph inner["Coupler — inner A*/BFS"]
-    C1["Ports through Yards"]
-    C2["Ports through Yards"]
+    C1["Links + transparent Stations"]
+    C2["Links + transparent Stations"]
   end
 
   L1 --> P1
@@ -1150,7 +1184,7 @@ flowchart TB
 
       <div class="svg-wrap" aria-hidden="true">
         <svg class="diagram" viewBox="0 0 860 200" xmlns="http://www.w3.org/2000/svg">
-          <text x="20" y="28" fill="#8b9bb4" font-size="12" font-family="system-ui,sans-serif" font-weight="600">CONSIST GROWS</text>
+          <text x="20" y="28" fill="#8b9bb4" font-size="12" font-family="system-ui,sans-serif" font-weight="600">ROUTE / BINDINGS GROW</text>
           <!-- step1 -->
           <rect x="20" y="50" width="70" height="36" rx="6" fill="rgba(91,159,212,0.2)" stroke="#5b9fd4" stroke-width="2"/>
           <text x="55" y="73" text-anchor="middle" fill="#5b9fd4" font-size="12" font-family="ui-monospace,monospace">R-17</text>
@@ -1171,12 +1205,12 @@ flowchart TB
           <text x="455" y="73" text-anchor="middle" fill="#6bcf8e" font-size="12" font-family="ui-monospace,monospace">N-04</text>
           <rect x="500" y="50" width="70" height="36" rx="6" fill="rgba(224,180,74,0.2)" stroke="#e0b44a" stroke-width="2"/>
           <text x="535" y="73" text-anchor="middle" fill="#e0b44a" font-size="12" font-family="ui-monospace,monospace">D-02</text>
-          <text x="455" y="110" text-anchor="middle" fill="#5c6b82" font-size="11" font-family="system-ui,sans-serif">full Booking consist</text>
-          <!-- yards note -->
+          <text x="455" y="110" text-anchor="middle" fill="#5c6b82" font-size="11" font-family="system-ui,sans-serif">full Booking route</text>
+          <!-- transparent path note -->
           <rect x="620" y="40" width="220" height="100" rx="10" fill="#1c2736" stroke="#ff8c69" stroke-width="1.5"/>
-          <text x="730" y="70" text-anchor="middle" fill="#ff8c69" font-size="12" font-weight="700" font-family="system-ui,sans-serif">Yards sit between</text>
-          <text x="730" y="92" text-anchor="middle" fill="#8b9bb4" font-size="11" font-family="system-ui,sans-serif">Coupler finds hop lists</text>
-          <text x="730" y="112" text-anchor="middle" fill="#8b9bb4" font-size="11" font-family="system-ui,sans-serif">Assembler picks Cars</text>
+          <text x="730" y="70" text-anchor="middle" fill="#ff8c69" font-size="12" font-weight="700" font-family="system-ui,sans-serif">Transparent on path</text>
+          <text x="730" y="92" text-anchor="middle" fill="#8b9bb4" font-size="11" font-family="system-ui,sans-serif">Coupler fills hops / Links</text>
+          <text x="730" y="112" text-anchor="middle" fill="#8b9bb4" font-size="11" font-family="system-ui,sans-serif">Assembler binds demand Stations</text>
         </svg>
       </div>
 
@@ -1204,14 +1238,14 @@ flowchart TB
         <p class="scenario-blurb" id="scenarioBlurb"></p>
       </div>
 
-      <!-- Always-visible toy world graph with cables -->
+      <!-- Always-visible toy world graph with Links -->
       <div class="topo-map" id="topoMap" aria-label="Toy topology graph">
         <h3>Toy world — full topology (shared by all scenarios)</h3>
         <p class="topo-intro">
           This is the <strong>wired fabric</strong>, not just a list.
-          Rectangles = devices; lines = cables.
-          <code>R-*</code>/<code>N-*</code>/<code>D-*</code> = <strong>Cars</strong> (Class instances).
-          <code>Y1</code>/<code>Y2</code> = <strong>Yards</strong> (junctions).
+          Rectangles = <strong>Stations</strong>; lines = <strong>Links</strong>.
+          <code>R-*</code>/<code>N-*</code>/<code>D-*</code> = demand Stations (types Refrigerated / Normal / Docking).
+          <code>Y1</code>/<code>Y2</code> = transparent Switch Stations (path fillers, not demand legs).
           As you step a scenario, edges light up for the active path (cyan = current, green = already taken, red dashed = blocked/rejected).
         </p>
         <div class="topo-graph-wrap">
@@ -1219,14 +1253,14 @@ flowchart TB
           <div class="topo-graph-hint">scroll to zoom · drag background to pan · click a node</div>
         </div>
         <div class="topo-legend-row">
-          <span><i style="background:#4a5d78"></i> idle cable</span>
+          <span><i style="background:#4a5d78"></i> idle Link</span>
           <span><i style="background:#7dd3fc"></i> active hop</span>
           <span><i style="background:#34d399"></i> used on path</span>
           <span><i style="background:#f87171;height:0;border-top:2px dashed #f87171;width:18px"></i> blocked / rejected</span>
-          <span style="color:#5b9fd4">● Refrigerated Car</span>
-          <span style="color:#6bcf8e">● Normal Car</span>
-          <span style="color:#e0b44a">● Docking Car</span>
-          <span style="color:#ff8c69">● Yard</span>
+          <span style="color:#5b9fd4">● Refrigerated Station</span>
+          <span style="color:#6bcf8e">● Normal Station</span>
+          <span style="color:#e0b44a">● Docking Station</span>
+          <span style="color:#ff8c69">● Switch (transparent)</span>
         </div>
         <div class="topo-booking" id="topoNodeInfo">
           <strong>Paths on this graph:</strong>
@@ -1269,23 +1303,24 @@ flowchart TB
         <div class="viz-grid">
           <div class="viz-card" style="grid-column:1/-1;font-size:0.82rem;color:var(--muted)">
             <strong style="color:var(--text)">How to read panels:</strong>
-            <span style="color:var(--class-a)"><strong>prefilter</strong></span> = cheap Assembler screen (path-independent; e.g. seats &gt; 5).
-            <span style="color:var(--yard)"><strong>accept</strong></span> = full Inspector at Coupler goal (path Context + track routing, e.g. can run track 1→2).
-            <strong>One Coupler/A* call</strong> = whole segment tail→next Class (Yards inside). Assembler does not step Yards.
+            <span style="color:var(--class-a)"><strong>Prefilter</strong></span> = cheap Assembler screen (setup + request + liveData; e.g. seats &gt; 5).
+            <span style="color:var(--yard)"><strong>inspect</strong></span> = full <code>Inspector.inspect</code> at Coupler goal (tasking + path context + track pair).
+            <strong>One Coupler/A* call</strong> = whole segment tail→next demand StationType (transparent Stations inside). Assembler does not step switches as legs.
           </div>
           <div class="viz-card">
-            <h4>Consist (Assembler state)</h4>
+            <h4>Route / bindings (Assembler state)</h4>
             <div class="consist" id="vizConsist"></div>
             <div class="consist-legend" id="consistLegend">
-              Bound Class Cars + Yards already committed on the Booking route. Mid-A*, Yards may appear as “expanding” before N/D is bound.
+              Bound demand Stations + transparent path Stations already on the Booking route.
+              Mid-A*, switches may appear as “expanding” before N/D is bound. Commit is whole-Booking.
             </div>
           </div>
           <div class="viz-card">
-            <h4>Context</h4>
+            <h4>Context (per Task)</h4>
             <div class="ctx" id="vizCtx"></div>
           </div>
           <div class="viz-card">
-            <h4>Cars · prefilter vs accept</h4>
+            <h4>Stations · Prefilter vs inspect</h4>
             <div id="candLegHint" style="font-size:0.78rem;color:var(--muted);margin-bottom:0.45rem"></div>
             <div class="cand-list" id="vizCands"></div>
           </div>
@@ -1295,21 +1330,21 @@ flowchart TB
           </div>
           <div class="viz-card fabric-card" style="grid-column: 1 / -1">
             <div class="fabric-card-head">
-              <h4>Fabric at track level · hop = in:Device:out</h4>
+              <h4>Fabric at track level · hop = in:Station:out</h4>
               <div class="walk-controls fabric-inline-nav" aria-label="Step while viewing fabric">
                 <button type="button" id="btnPrevFabric" aria-label="Previous step">←</button>
                 <button type="button" id="btnNextFabric" class="primary" aria-label="Next step">→</button>
               </div>
             </div>
             <p style="font-size:0.78rem;color:var(--muted);margin:0 0 0.5rem;max-width:none">
-              Yards show <strong>IN tracks</strong> (left) and <strong>OUT tracks</strong> (right).
-              One cable per out track (no multiplex).
+              Transparent switches show <strong>IN tracks</strong> (left) and <strong>OUT tracks</strong> (right).
+              One Link per out track in this toy (no multiplex).
               <code>1:Y1:1</code>→N-04 · <code>1:Y1:2</code>→Y2 · <code>1:Y1:3</code>→N-08 ·
               <code>5:Y1:6</code>→N-12 (re-entry only; illegal 1→6).
               Y2 out5→N-04 · Y2 out6→Y1 in5 (loopback).
               Step with the buttons here, the floating bar, or <span class="kbd">←</span>/<span class="kbd">→</span>.
             </p>
-            <svg class="fabric-svg" id="fabricSvg" viewBox="0 0 960 390" xmlns="http://www.w3.org/2000/svg" aria-label="Port-level fabric diagram"></svg>
+            <svg class="fabric-svg" id="fabricSvg" viewBox="0 0 960 390" xmlns="http://www.w3.org/2000/svg" aria-label="Track-level fabric diagram"></svg>
           </div>
           <div class="viz-card" style="grid-column: 1 / -1">
             <h4>Notes</h4>
@@ -1335,25 +1370,27 @@ flowchart TB
         <div class="panel">
           <h3><span class="layer-tag outer">Outer</span> Assembler</h3>
           <p style="margin:0;max-width:none;font-size:0.9rem;color:var(--muted)">
-            Walk legs in order. For each Class, run that Class’s cheap
-            <strong>prefilter</strong> (mini-inspector) to build Coupler goals.
-            Rank, call Coupler; full <strong>accept()</strong> runs at goal arrival.
-            Bind Car, merge facts, checkpoint, sticky/fail.
+            Walk demand legs in order (non-transparent StationTypes only).
+            For each leg: <strong>Prefilter</strong> stations → agenda of targets →
+            Coupler (or virtual source on first type) → <code>inspect</code> when peeled.
+            Bind, merge Task context, checkpoint timing, sticky/fail. Whole-Booking commit.
           </p>
         </div>
         <div class="panel">
           <h3><span class="layer-tag inner">Inner</span> Coupler</h3>
           <p style="margin:0;max-width:none;font-size:0.9rem;color:var(--muted)">
-            One segment: start = consist <strong>tail port</strong>,
-            goals = candidate head ports. Bounded multi-sink BFS/A* on the
-            <strong>port graph</strong> (cables + legal Yard in→out).
+            One segment: start = tail Station OUT tracks (or virtual S0 for first type),
+            goals = prefiltered stations of next type. Bounded multi-sink A* on
+            <strong>Stations + Tracks + Links</strong> with edgeCost + NeighborRank;
+            transparent stations are path fillers.
           </p>
         </div>
       </div>
 
       <div class="callout ok">
-        <strong>Contract:</strong> Assembler runs Class legs and Booking state.
-        Coupler finds <em>one successful path between two Classes</em> (any number of Yards in the middle) —
+        <strong>Contract:</strong> Assembler runs demand legs and Booking state.
+        Coupler finds <em>one successful path between two non-transparent types</em>
+        (any number of transparent stations in the middle) —
         <strong>early return on success</strong>, or <strong>fail when search is exhausted</strong>.
         Assembler does <em>not</em> get a callback after every failed path try.
       </div>
@@ -1365,32 +1402,32 @@ flowchart TB
         <tbody>
           <tr>
             <td><strong>Main use</strong></td>
-            <td>Class leg order, candidate Cars, Context, checkpoints, sticky, whole-Booking fail</td>
-            <td>Fabric path from <em>tail Car</em> to <em>some next-Class Car</em></td>
+            <td>Leg order, Prefilter candidates, agenda/alts, Task context, checkpoints, sticky, whole-Booking commit/fail</td>
+            <td>Fabric path from <em>tail Station</em> to <em>some next-type Station</em></td>
           </tr>
           <tr>
             <td><strong>How often they talk</strong></td>
-            <td>Once per Class→Class segment (after first Car)</td>
+            <td>Once per type→type segment (first type: virtual source, no inbound Link required)</td>
             <td>Many expansions <em>inside</em> one call; <strong>one</strong> return to Assembler</td>
           </tr>
           <tr>
             <td><strong>Success</strong></td>
-            <td>Bind car, append <em>full</em> hop list from Coupler</td>
-            <td>Early return: path + car when goal port + Inspector OK</td>
+            <td>Bind station, append <em>full</em> hop list from Coupler; last type often no OUT needed</td>
+            <td>Early return: path + station when goal + inspect OK</td>
           </tr>
           <tr>
             <td><strong>Failure</strong></td>
-            <td>Booking UNSAT at this leg</td>
+            <td>Booking UNSAT at this leg; discard working overlay</td>
             <td>Open set empty / budget — no acceptable path</td>
           </tr>
           <tr>
-            <td><strong>Yards</strong></td>
-            <td>Never steps Yards as legs</td>
-            <td>0..many Yard hops between the two Classes (any types)</td>
+            <td><strong>Transparent</strong></td>
+            <td>Never steps transparent types as demand legs</td>
+            <td>0..many transparent hops between demand Stations</td>
           </tr>
           <tr>
             <td><strong>Wrong</strong></td>
-            <td colspan="2">A* returns R→Y1→N4 → Assembler Inspector-fails → Assembler starts a <em>new</em> A* for R→Y2→N4</td>
+            <td colspan="2">A* returns R→Y1→N4 → Assembler inspect-fails → Assembler starts a <em>new</em> A* for R→Y2→N4</td>
           </tr>
           <tr>
             <td><strong>Right</strong></td>
@@ -1399,118 +1436,127 @@ flowchart TB
         </tbody>
       </table>
 
-      <pre>// Assembler control flow
-for each Class leg:
-  candidates = Inspector-filter + rank
+      <pre>// Assembler control flow (sketch)
+for each demand leg (non-transparent StationType):
+  candidates = Prefilter(setup, request, liveData) + rank / Oracle
   if first leg:
-    bind Car only (no Coupler)
+    // virtual source S0 → each candidate; no inbound Link; no input track used
+    bind start Station (Coupler/inspect entry-special)
   else:
-    result = Coupler.couple(tail → candidates, context)  // BLOCKED until done
-    // inside Coupler: try short paths, fail Inspector, expand Y2, …
-    if fail: Booking UNSAT
-    bind result.car; route += result.hops; context = result.context
+    agenda = sort(targets on candidates)  // edgeCost, NeighborRank, track
+    while agenda:
+      path = Coupler.find(tail → target)
+      if path && inspect(setup, tasking+candidate, request, liveData) OK:
+        bind; route += hops; continue booking
+    if fail: discard working overlay; Booking UNSAT
 
 
 // Coupler — one segment only
-couple(start_ports, goal_cars, context):
-  multi-sink A*/BFS on port graph
-  on reach goal Car:
-    if Inspector.accept(..., path_context): return success  // early
-    else: discard, continue
-  if exhausted/budget: return failure
+couple(start_tracks | S0, goal_stations, working_tasking):
+  multi-sink A*  f = g(edgeCost) + h(Oracle hop-count)
+  expand via Links + legal in→out on transparent Stations
+  on reach goal: try inspect once; fail → continue search
+  exhausted/budget → failure
 </pre>
 
       <div class="callout">
-        <strong>A → Z with only Yards between?</strong> Still <em>one</em> Coupler call.
-        Path may be <code>A-car → Y₁ → … → Y₁₂ → Z-car</code>.
-        Twelve yard types = edge rules on the fabric, not twelve Assembler steps.
+        <strong>A → Z with only transparent stations between?</strong> Still <em>one</em> Coupler call.
+        Path may be <code>A-station → SW₁ → … → SW₁₂ → Z-station</code>.
+        Twelve switch types = legalPairs / capacity rules on the fabric, not twelve Assembler steps.
         Full picture + open questions: <code>docs/SPEC.md</code>.
-        Implementer contracts: <code>docs/BUILD_SPEC.md</code> §8.0.
+        Implementer contracts: <code>docs/BUILD_SPEC.md</code> (canonical).
       </div>
 
       <!-- ========== ASSEMBLER ========== -->
       <h2 id="assembler">Assembler (deep dive)</h2>
       <p>
-        The Assembler’s <strong>main use</strong> is to turn a multi-Class Booking into a sequence of
-        “pick next Car + connect from previous,” using Coupler as the fabric engine for each segment.
-        It does not expand every Yard track. It holds consist, Context, checkpoints, and sticky/fail.
+        The Assembler’s <strong>main use</strong> is to turn a multi-leg Booking into a sequence of
+        “bind next demand Station + connect from previous,” using Coupler as the fabric engine for each segment.
+        It does not expand every switch track. It holds bindings/route, Task context, agenda, checkpoints, and sticky/fail.
+        Working tasking is path-local until <strong>whole-Booking SAT</strong> commits.
       </p>
 
       <h3>What it stores between legs</h3>
       <table>
         <thead><tr><th>Memory</th><th>Feeds into</th></tr></thead>
         <tbody>
-          <tr><td>Consist (Cars bound)</td><td>Answer + sticky replay</td></tr>
-          <tr><td>Context facts</td><td>Filter next candidates <em>before</em> A*</td></tr>
-          <tr><td>Tail port of last Car</td><td><strong>Start</strong> of next Coupler run</td></tr>
-          <tr><td>Route hops so far</td><td>Full Booking route</td></tr>
-          <tr><td>Checkpoints (closed Classes)</td><td>Cull other Cars of that Class</td></tr>
+          <tr><td>Bindings (Stations used)</td><td>Plan + sticky replay</td></tr>
+          <tr><td>Task context (accumulating)</td><td>Downstream inspect / Prefilter where safe</td></tr>
+          <tr><td>Tail OUT track of last bound station</td><td><strong>Start</strong> of next Coupler run</td></tr>
+          <tr><td>Route hops so far</td><td>Full Booking route (user-visible)</td></tr>
+          <tr><td>Checkpoints (closed StationTypes)</td><td>Cull other stations of that type</td></tr>
+          <tr><td>Agenda alts</td><td>Peel next target if later leg fails under working overlay</td></tr>
         </tbody>
       </table>
 
       <h3>Why outer is serial</h3>
       <p>
-        Later eligibility depends on earlier binds (context). You cannot
-        freely assign all Classes in parallel and join paths afterward.
-        Parallelism is fine <em>inside</em> a leg (filter/rank) or inside Coupler
+        Later eligibility depends on earlier binds (context / tasking). You cannot
+        freely assign all StationTypes in parallel and join paths afterward.
+        Parallelism is fine <em>inside</em> a leg (Prefilter/rank) or inside Coupler
         precompute — not across legs as independent solves.
       </p>
 
-      <h3>Checkpointed Classes</h3>
+      <h3>Checkpointed StationTypes</h3>
       <p>
-        When a Class is checkpointed (class-once), claiming a Car freezes that Class
-        for the Booking. Failures <strong>after</strong> that leg are reported as
-        conditional on the lock:
+        When a StationType is checkpointed (type-once), binding a Station freezes that type
+        for the Booking. DEFAULT timing: after the <strong>next</strong> non-transparent leg
+        has a successful working Task (or last leg at full SAT). Failures <strong>after</strong>
+        that lock are reported as conditional:
       </p>
       <div class="callout warn">
         “Failed at Docking <strong>under checkpoint Refrigerated = R-17</strong>.
-        Other Refrigerated Cars were not considered.”
+        Other Refrigerated Stations were not considered.”
       </div>
 
       <!-- ========== ASTAR ========== -->
       <h2 id="astar">Coupler — multi-sink bounded A* / BFS</h2>
       <p>
-        Each coupling segment is a normal shortest-path problem on
-        <strong>ports</strong>, not on Class labels.
+        Each coupling segment is a path search on
+        <strong>Stations + Tracks + Links</strong>, not on StationType labels alone.
+        Dynamic <strong>edgeCost</strong> ranks legal neighbors; <strong>NeighborRank</strong>
+        (SmartNode) breaks ties; Oracle hop-count supplies optimistic <code>h</code>.
       </p>
 
       <pre>// One leg's fabric search
-starts = tail ports of consist (e.g. last Car's outs)
-goals  = head ports of ranked candidate Cars for this Class
+starts = tail OUT tracks (or virtual S0 → first-type candidates)
+goals  = prefiltered stations of next demand StationType
 
-search = BFS if unit hop cost
-       = A*  if weighted cost + heuristic from Oracle
+search = A*  f = g(edgeCost) + h(Oracle min hops)
+// edgeCost may include hop baseline, transparent penalty, fill-first empty penalty
 
 until hit any goal OR budget exhausted:
-  expand via cables and legal Yard (in→out) pairs
-  prune: repeat hop_key, hop budget H, visits/yard V, max expansions</pre>
+  expand via Links and legal in→out pairs on stations
+  prune: repeat hop_key, hop budget H, visits/station V, max expansions
+  at goal: inspect(setup, tasking+candidate, request, liveData)</pre>
 
-      <h3>Why multi-sink (not one A* per Car)</h3>
+      <h3>Why multi-sink (not one A* per Station)</h3>
       <p>
-        One search from the tail toward <em>all</em> candidate ports explores the
-        Yard fabric once. Prefer that over N independent A* runs that re-walk
+        One search from the tail toward <em>all</em> candidate stations explores the
+        transparent fabric once. Prefer that over N independent A* runs that re-walk
         the same corridors.
       </p>
 
-      <h3>Two reasons for multi-Yard loopbacks</h3>
+      <h3>Two reasons for multi-switch loopbacks</h3>
       <table>
         <thead><tr><th>Cause</th><th>What forces the detour</th><th>Example</th></tr></thead>
         <tbody>
           <tr>
-            <td><strong>Track / map</strong></td>
-            <td>Legal in→out pairs (or cables) do not allow the short hop</td>
-            <td>Yard1 forbids <code>1→6</code>; only <code>5→6</code> reaches the cable to the next Car</td>
+            <td><strong>Track / legalPairs</strong></td>
+            <td>Legal in→out pairs (or Links) do not allow the short hop</td>
+            <td>Y1 forbids <code>1→6</code>; only <code>5→6</code> reaches the Link to the next Station</td>
           </tr>
           <tr>
-            <td><strong>Context / Inspector</strong></td>
-            <td>Short cable <em>exists</em>, but next Class Inspector fails without facts gained only by visiting another Yard (or device) first</td>
-            <td>Yard1→Kind D is wired, but DockingInspector needs a stamp from Yard2 → path must hit Y2, loop back, then Kind D</td>
+            <td><strong>Context / inspect</strong></td>
+            <td>Short Link <em>exists</em>, but next-type inspect fails without facts gained only by visiting another transparent station first</td>
+            <td>Y1→N is wired, but Normal inspect needs a stamp from Y2 → path must hit Y2, then N</td>
           </tr>
         </tbody>
       </table>
       <p>
-        Both can combine on one Booking. Coupler state may need more than ports:
-        <strong>port + partial Context acquired along the path</strong> (or mandatory waypoints derived from “what facts does this leg still need?”).
+        Both can combine on one Booking. Coupler state includes more than tracks:
+        <strong>hop path + Task context acquired along the path</strong>
+        (context seeds the candidate Task at each inspect).
       </p>
 
       <h3 id="anti-loop">Useful re-entry vs infinite loopback</h3>
@@ -1519,11 +1565,11 @@ until hit any goal OR budget exhausted:
         <em>good</em> re-entry: <code>1:Y1:2</code> then later <code>5:Y1:6</code>
         (different <code>hop_key</code>) after Y2→N-04 is closed.
         The same fabric can thrash forever if Coupler keeps expanding
-        <code>Y1↔Y2</code> on <em>already used</em> ports with no new facts.
+        <code>Y1↔Y2</code> on <em>already used</em> tracks with no new facts.
       </p>
       <div class="callout">
-        <strong>Rule of thumb:</strong> re-visit a Yard only when the
-        <code>hop_key = (device, in, out)</code> is new <em>or</em> path Context improved.
+        <strong>Rule of thumb:</strong> re-visit a station only when the
+        <code>hop_key = (stationId, in, out)</code> is new <em>or</em> path Context improved.
         Same hop_key again = spin → prune. Still over-visit? Hard caps → <code>BUDGET</code>.
       </div>
       <table>
@@ -1535,7 +1581,7 @@ until hit any goal OR budget exhausted:
             <td>Yes — cannot expand the same in→out again</td>
           </tr>
           <tr>
-            <td><strong>max_visits_per_yard V</strong> (default 3)</td>
+            <td><strong>max_visits_per_station V</strong> (default 3)</td>
             <td>Yes if within V</td>
             <td>Yes — even with many distinct hop_keys</td>
           </tr>
@@ -1550,12 +1596,12 @@ until hit any goal OR budget exhausted:
             <td>Yes — mesh thrash → finite <code>BUDGET</code>, never hang</td>
           </tr>
           <tr>
-            <td>Optional no immediate cable backtrack</td>
+            <td>Optional no immediate Link backtrack</td>
             <td>Usually</td>
             <td>Culls trivial A→B→A edges</td>
           </tr>
           <tr>
-            <td>Closed set <code>(port, context_fp)</code></td>
+            <td>Closed set <code>(track-state, context_fp)</code></td>
             <td>Yes — stamp later can reopen goal logic</td>
             <td>Avoids re-expanding same state</td>
           </tr>
@@ -1567,13 +1613,13 @@ until hit any goal OR budget exhausted:
         Spec: BUILD_SPEC policy + Coupler prune; SPEC hop_key anti-loop.
       </p>
 
-      <h3>Restricted Yard forces detour (example)</h3>
+      <h3>Restricted switch forces detour (example)</h3>
       <div class="svg-wrap">
         <svg class="diagram" viewBox="0 0 780 290" xmlns="http://www.w3.org/2000/svg">
-          <text x="20" y="24" fill="#8b9bb4" font-size="12" font-family="system-ui,sans-serif">Need out 6 for next Car · in 1 cannot cross to out 6 inside Yard 1</text>
+          <text x="20" y="24" fill="#8b9bb4" font-size="12" font-family="system-ui,sans-serif">Need out 6 for next Station · in 1 cannot cross to out 6 inside Switch Y1</text>
           <!-- Y1 -->
           <rect x="80" y="50" width="200" height="180" rx="12" fill="#2a1f1a" stroke="#ff8c69" stroke-width="2"/>
-          <text x="180" y="78" text-anchor="middle" fill="#ff8c69" font-size="14" font-weight="700" font-family="system-ui,sans-serif">Yard 1</text>
+          <text x="180" y="78" text-anchor="middle" fill="#ff8c69" font-size="14" font-weight="700" font-family="system-ui,sans-serif">Y1 · Switch</text>
           <text x="100" y="110" fill="#94a3b8" font-size="10" font-family="system-ui,sans-serif">IN</text>
           <rect x="100" y="120" width="32" height="24" rx="4" fill="#121a24" stroke="#7dd3fc" stroke-width="2"/>
           <text x="116" y="137" text-anchor="middle" fill="#7dd3fc" font-size="12" font-family="monospace">1</text>
@@ -1593,7 +1639,7 @@ until hit any goal OR budget exhausted:
           <text x="180" y="210" text-anchor="middle" fill="#7dd3fc" font-size="9" font-family="system-ui,sans-serif">5→6 ok (2nd visit)</text>
           <!-- Y2 -->
           <rect x="380" y="80" width="140" height="100" rx="12" fill="#2a1f1a" stroke="#ff8c69" stroke-width="2"/>
-          <text x="450" y="125" text-anchor="middle" fill="#ff8c69" font-size="13" font-weight="700" font-family="system-ui,sans-serif">Yard 2</text>
+          <text x="450" y="125" text-anchor="middle" fill="#ff8c69" font-size="13" font-weight="700" font-family="system-ui,sans-serif">Y2 · Switch</text>
           <text x="450" y="145" text-anchor="middle" fill="#8b9bb4" font-size="10" font-family="system-ui,sans-serif">1→5 rearrange</text>
           <!-- Y1 out1 → Y2 in -->
           <path d="M262 132 H380" stroke="#7dd3fc" stroke-width="2.5"/>
@@ -1601,23 +1647,23 @@ until hit any goal OR budget exhausted:
           <path d="M520 150 C 600 150, 640 210, 500 235 C 300 255, 140 230, 100 182"
                 stroke="#7dd3fc" stroke-width="2.5" fill="none" stroke-linecap="round"/>
           <circle cx="100" cy="182" r="3.5" fill="#7dd3fc"/>
-          <text x="300" y="268" text-anchor="middle" fill="#7dd3fc" font-size="11" font-family="system-ui,sans-serif">loopback cable → Y1 <tspan font-weight="700">IN 5</tspan> (then internal 5→6 from right of box)</text>
+          <text x="300" y="268" text-anchor="middle" fill="#7dd3fc" font-size="11" font-family="system-ui,sans-serif">loopback Link → Y1 <tspan font-weight="700">IN 5</tspan> (then internal 5→6 from right of box)</text>
           <text x="40" y="248" fill="#8b9bb4" font-size="12" font-family="ui-monospace,monospace">1:y1:1 → 1:y2:5 → 5:y1:6 → …</text>
         </svg>
       </div>
 
       <!-- ========== YARDS ========== -->
-      <h2 id="yards">Yards, tracks, hop syntax</h2>
+      <h2 id="yards">Tracks, Links, hop syntax</h2>
       <p>
-        Graph nodes for Coupler are <strong>ports</strong>, not whole devices.
-        Edges are (1) cables out→in and (2) legal internal pairs inside a Yard.
+        Coupler expands the station graph: <strong>Links</strong> (OUT→IN) plus
+        legal internal pairs on a station. Transparent types fill path only.
       </p>
-      <pre>hop syntax:  in : device : out
-example:     5 : yard1 : 6     // enter yard1 on 5, leave on 6</pre>
+      <pre>hop syntax:  in : station : out
+example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
       <p>
-        Direct Yards only allow matching numbers. Aggregators / expanders
-        introduce shared <code>Ag</code> ports with their own capacity rules
-        (mutex vs combine — product policy).
+        Direct transparent types only allow matching numbers. Aggregators / expanders
+        introduce shared <code>Ag</code> tracks with their own capacity rules
+        (mutex vs combine — product policy; DEFAULT exclusive).
       </p>
 
       <!-- ========== HEURISTICS ========== -->
@@ -1626,29 +1672,29 @@ example:     5 : yard1 : 6     // enter yard1 on 5, leave on 6</pre>
         <thead><tr><th>Heuristic</th><th>Layer</th><th>Effect</th></tr></thead>
         <tbody>
           <tr>
-            <td><strong>Checkpoint / class-once</strong></td>
+            <td><strong>Checkpoint / type-once</strong></td>
             <td>Assembler</td>
-            <td>After claim, drop other Cars of that Class. Sub-optimal by design; huge cull.</td>
+            <td>After bind (DEFAULT after next non-transparent succeeds), drop other Stations of that type. Sub-optimal by design; huge cull.</td>
           </tr>
           <tr>
             <td><strong>First-fit on stable order</strong></td>
-            <td>Assembler</td>
+            <td>Assembler agenda</td>
             <td>Deterministic; sticky id first; no full optimality.</td>
           </tr>
           <tr>
-            <td><strong>Piggyback Setup</strong></td>
-            <td>Assembler rank</td>
-            <td>Prefer Cars already in required Setup (reconfig is expensive).</td>
+            <td><strong>Fill-first / edgeCost</strong></td>
+            <td>Coupler</td>
+            <td>Prefer already-tasked peers; transparent penalty; hop baseline. NeighborRank only on equal cost.</td>
           </tr>
           <tr>
             <td><strong>Sticky snapshot</strong></td>
             <td>Resolve entry</td>
-            <td>Same Booking + valid world → same Cars/route; skip search.</td>
+            <td>Same Booking + valid relevant world → same route/bindings; skip search.</td>
           </tr>
           <tr>
-            <td><strong>Context filters</strong></td>
+            <td><strong>Prefilter</strong></td>
             <td>Assembler</td>
-            <td>Facts from earlier Cars shrink next candidate sets before A*.</td>
+            <td>setup + request + liveData shrink goals before A* (no path context).</td>
           </tr>
           <tr>
             <td><strong>Multi-sink couple</strong></td>
@@ -1656,9 +1702,9 @@ example:     5 : yard1 : 6     // enter yard1 on 5, leave on 6</pre>
             <td>One fabric search per leg toward all candidates.</td>
           </tr>
           <tr>
-            <td><strong>Oracle reachability</strong></td>
-            <td>Before Coupler</td>
-            <td>Drop geometrically impossible goals within H (optimistic vs capacity).</td>
+            <td><strong>Oracle hop-count h</strong></td>
+            <td>Before / during Coupler</td>
+            <td>BFS distances on online Links; drop impossible goals; optimistic vs tasking.</td>
           </tr>
           <tr>
             <td><strong>Hop / visit / expansion budgets</strong></td>
@@ -1683,17 +1729,17 @@ example:     5 : yard1 : 6     // enter yard1 on 5, leave on 6</pre>
 
       <h3>Hot path</h3>
       <ol>
-        <li><strong>Sticky hit</strong> → return snapshot (fastest).</li>
-        <li>Per leg: index by Class/Setup → context filter → rank → oracle prune.</li>
-        <li><strong>One</strong> multi-sink bounded A*/BFS (not one search per Car).</li>
+        <li><strong>Sticky hit</strong> → return cached plan (fastest).</li>
+        <li>Per leg: index by StationType → Prefilter → rank → Oracle prune → agenda.</li>
+        <li><strong>One</strong> multi-sink bounded A*/BFS (not one search per Station).</li>
         <li>Hard caps: <code>H</code>, <code>V</code>, <code>max_expansions</code>, wall clock.</li>
       </ol>
 
       <h3>Data structures (Coupler hot loop)</h3>
       <ul>
-        <li>Integer port ids; CSR adjacency for cables + Yard maps.</li>
-        <li>Sparse internal maps (only legal pairs).</li>
-        <li>Visited on port (and visit count if V&gt;1).</li>
+        <li>Integer track/station ids; CSR adjacency for Links + legalPairs.</li>
+        <li>Sparse internal maps (only legal in→out pairs).</li>
+        <li>Visited on hop_key / track-state (and visit count if V&gt;1).</li>
         <li>No string labels inside expand.</li>
       </ul>
 
@@ -1715,16 +1761,16 @@ example:     5 : yard1 : 6     // enter yard1 on 5, leave on 6</pre>
       <!-- ========== EXPLOSION ========== -->
       <h2 id="explosion">Graph explosion — more levers</h2>
       <p>
-        Yards are N:M and Yard–Yard meshes can explode. Beyond the heuristics above:
+        Transparent switches are N:M and switch–switch meshes can explode. Beyond the heuristics above:
       </p>
 
       <h3>Discussed</h3>
       <ul>
-        <li>Port-level state + hop_key anti-loop</li>
+        <li>Track-level state + hop_key anti-loop</li>
         <li>H / V / max expansions</li>
-        <li>Oracle + A* heuristic distances</li>
-        <li>Multi-sink; checkpoint; context prune</li>
-        <li>Negative cache so failed Bookings do not rescan when nothing hopeful changed</li>
+        <li>Oracle hop-count + A* h</li>
+        <li>Multi-sink; checkpoint; Prefilter prune</li>
+        <li>Negative sticky so failed Bookings do not rescan when nothing hopeful changed</li>
       </ul>
 
       <h3>Additional ideas (not fully designed yet)</h3>
@@ -1732,8 +1778,8 @@ example:     5 : yard1 : 6     // enter yard1 on 5, leave on 6</pre>
         <thead><tr><th>Technique</th><th>Idea</th><th>Tradeoff</th></tr></thead>
         <tbody>
           <tr>
-            <td><strong>Yard clustering / contraction</strong></td>
-            <td>Collapse dense Yard regions to boundary ports; precompute boundary→boundary costs; expand interior only when entered.</td>
+            <td><strong>Switch clustering / contraction</strong></td>
+            <td>Collapse dense transparent regions to boundary tracks; precompute boundary→boundary costs; expand interior only when entered.</td>
             <td>Build complexity; rebuild on topology change.</td>
           </tr>
           <tr>
@@ -1748,17 +1794,17 @@ example:     5 : yard1 : 6     // enter yard1 on 5, leave on 6</pre>
           </tr>
           <tr>
             <td><strong>Corridor / template routes</strong></td>
-            <td>For common Class pairs, preferred Yard corridors; search deviation only on miss.</td>
+            <td>For common StationType pairs, preferred transparent corridors; search deviation only on miss.</td>
             <td>Ops knowledge; maintenance.</td>
           </tr>
           <tr>
             <td><strong>Hierarchical planning</strong></td>
-            <td>Region-level path first, then port refine.</td>
+            <td>Region-level path first, then track refine.</td>
             <td>Two-level correctness.</td>
           </tr>
           <tr>
             <td><strong>Incremental Oracle</strong></td>
-            <td>Update reachability only for affected components on topology edit.</td>
+            <td>Update hop-count only for affected components on Link/online edit.</td>
             <td>Engineering cost.</td>
           </tr>
           <tr>
@@ -1767,18 +1813,18 @@ example:     5 : yard1 : 6     // enter yard1 on 5, leave on 6</pre>
             <td>Can be wrong if too coarse; keep optimistic fail-open carefully.</td>
           </tr>
           <tr>
-            <td><strong>Beam on partial consists</strong></td>
-            <td>Keep k partial trains instead of pure first-fit — better success without full meta-A*.</td>
+            <td><strong>Beam on partial routes</strong></td>
+            <td>Keep k partial plans instead of pure first-fit — better success without full meta-A*.</td>
             <td>k× work.</td>
           </tr>
           <tr>
             <td><strong>Lazy Coupler</strong></td>
-            <td>Only run A* for top-ranked candidates after oracle; or stop at first goal in preference order.</td>
+            <td>Only run A* for top-ranked agenda targets after Oracle; or stop at first goal in preference order.</td>
             <td>Default we want.</td>
           </tr>
           <tr>
-            <td><strong>Separate geometry vs occupancy</strong></td>
-            <td>Oracle ignores live claims (optimistic); Coupler applies occupancy — avoids constant oracle rebuild.</td>
+            <td><strong>Separate geometry vs tasking</strong></td>
+            <td>Oracle ignores tasking (optimistic); Coupler applies edgeCost / inspect — avoids constant Oracle rebuild.</td>
             <td>Some false-positive couple attempts.</td>
           </tr>
         </tbody>
@@ -1786,16 +1832,16 @@ example:     5 : yard1 : 6     // enter yard1 on 5, leave on 6</pre>
 
       <div class="mermaid">
 flowchart LR
-  subgraph reduce_cands["Fewer Cars into Coupler"]
-    I[Class index]
-    X[Context filter]
+  subgraph reduce_cands["Fewer Stations into Coupler"]
+    I[StationType index]
+    X[Prefilter]
     K[Checkpoint closed]
     O[Oracle reachable?]
     I --> X --> K --> O
   end
   subgraph reduce_mesh["Cheaper fabric search"]
     M[Multi-sink]
-    A[A* + h]
+    A[A* + edgeCost + h]
     B[Budgets H V exp]
     L[hop_key anti-loop]
     CL[Optional cluster]
@@ -1813,10 +1859,10 @@ flowchart LR
       </p>
 
       <h3>Pipeline (explain at first zero)</h3>
-      <pre>Catalog → Inspector(request, car, context) → Busy → Oracle geometry → Free path → Budget</pre>
+      <pre>Catalog → Prefilter(setup, request, liveData) → Oracle geometry → Coupler path → inspect(tasking) → Budget</pre>
       <p style="font-size:0.9rem;color:var(--muted)">
-        Inspector subsumes “Setup + Class-specific rules + Context consumption.”
-        Prefer one reject reason from the Inspector when possible (structured),
+        Prefilter is path-independent; inspect carries Task context and provisional tasking.
+        Prefer one structured reject reason from Prefilter/Inspector when possible,
         not a silent empty list.
       </p>
 
@@ -1824,13 +1870,13 @@ flowchart LR
       <table>
         <thead><tr><th>Code</th><th>When</th><th>User-facing gist</th></tr></thead>
         <tbody>
-          <tr><td><code>NO_CANDIDATES</code></td><td>No Car passes this Class’s Inspector for the request/context</td><td>Nothing fits this leg given earlier locks</td></tr>
-          <tr><td><code>INSPECTOR_REJECT</code></td><td>Optional detail: Inspector returned a typed reason on sampled Cars</td><td>e.g. “Car config incompatible with request X”</td></tr>
-          <tr><td><code>ALL_BUSY</code></td><td>Matches exist, all claimed</td><td>Matching Cars all in use</td></tr>
-          <tr><td><code>UNREACHABLE</code></td><td>Oracle: no geometry within H</td><td>No Yard path to any matching Car</td></tr>
-          <tr><td><code>CAPACITY_BLOCKED</code></td><td>Geometry ok; hops/ports busy</td><td>Paths blocked by other Bookings</td></tr>
+          <tr><td><code>NO_CANDIDATES</code></td><td>No Station passes Prefilter for this leg’s request</td><td>Nothing fits this leg given earlier locks</td></tr>
+          <tr><td><code>INSPECT_FAIL</code></td><td>Inspector rejected candidate Task(s) after path</td><td>e.g. missing context stamp / track pair illegal</td></tr>
+          <tr><td><code>CAPACITY</code> / busy</td><td>Matches exist but tasking/liveData blocks</td><td>Matching Stations all occupied</td></tr>
+          <tr><td><code>UNREACHABLE</code></td><td>Oracle: no geometry within H</td><td>No Link path to any matching Station</td></tr>
+          <tr><td><code>CAPACITY_BLOCKED</code></td><td>Geometry ok; hops/tracks busy</td><td>Paths blocked by other Bookings</td></tr>
           <tr><td><code>BUDGET</code></td><td>Hit expansion/hop limits</td><td>No path within search limits</td></tr>
-          <tr><td><code>CONTEXT_DEAD_END</code></td><td>Checkpoints make later legs impossible</td><td>Earlier Car choices leave no continuation</td></tr>
+          <tr><td><code>CONTEXT_DEAD_END</code></td><td>Checkpoints make later legs impossible</td><td>Earlier Station choices leave no continuation</td></tr>
           <tr><td><code>POLICY</code></td><td>Rule forbids combination</td><td>Disallowed by policy</td></tr>
         </tbody>
       </table>
@@ -1842,22 +1888,22 @@ flowchart LR
   code: "CAPACITY_BLOCKED",
   summary: "…",
   checkpoints: [
-    { leg: 1, class: "Refrigerated", car: "R-17" },
-    { leg: 2, class: "Normal", car: "N-04" }
+    { leg: 1, stationType: "Refrigerated", station: "R-17" },
+    { leg: 2, stationType: "Normal", station: "N-04" }
   ],
   counts: {
-    candidates_before_context: 40,
-    after_context: 12,
-    after_busy: 5,
+    candidates_before_prefilter: 40,
+    after_prefilter: 12,
     oracle_ok: 3
   },
-  blockers: [ { booking: "B-88", hop: "5:yard1:6" } ],
+  blockers: [ { booking: "B-88", hop: "5:Y1:6" } ],
+  pathTaken: [ /* hops */ ],
   suggestions: [ "Release B-88", "Reopen checkpoint on Normal" ]
 }</pre>
 
       <p>
         Checkpoints let you <strong>scope</strong> the failure: it failed
-        <em>under these locks</em>. That is not a proof another Car would work
+        <em>under these locks</em>. That is not a proof another Station would work
         until you reopen and succeed.
       </p>
 
@@ -1865,29 +1911,31 @@ flowchart LR
       <h2 id="cache">Sticky success &amp; negative cache</h2>
       <h3>SAT (sticky)</h3>
       <p>
-        Persist consist + full hop list + setups. On resolve, if still valid →
-        return without re-search. Avoids needless re-Setup.
+        Persist plan (route, bindings, planSegments) under demand hash + relevant epochs.
+        On resolve, if still valid → return without re-search.
       </p>
       <h3>UNSAT (negative cache)</h3>
       <p>
-        Cache failure + reason under a token of <strong>hopeful</strong> world inputs.
-        Do not thrash thousands of Cars when nothing that could open a solution changed.
+        Cache failure + reason under <strong>hopeful</strong> relevant world inputs
+        (demand types / samples — not whole plant).
+        Do not thrash thousands of Stations when nothing that could open a solution changed.
       </p>
       <table>
         <thead><tr><th>Event</th><th>Retry failed Booking?</th></tr></thead>
         <tbody>
           <tr><td>Other Booking claims more capacity</td><td><strong>No</strong> — world tighter</td></tr>
-          <tr><td>Release of claims</td><td><strong>Yes</strong></td></tr>
-          <tr><td>Setup unlock / change that enables</td><td><strong>Yes</strong></td></tr>
-          <tr><td>New cable / legal Yard pair</td><td><strong>Yes</strong></td></tr>
-          <tr><td>New Car online</td><td><strong>Yes</strong></td></tr>
+          <tr><td>Tasking freed on relevant types</td><td><strong>Yes</strong></td></tr>
+          <tr><td>Setup change on relevant station/type</td><td><strong>Yes</strong></td></tr>
+          <tr><td>New Link / Link opened / legalPairs change</td><td><strong>Yes</strong></td></tr>
+          <tr><td>New Station online (relevant type)</td><td><strong>Yes</strong></td></tr>
           <tr><td>Looser policy (higher H)</td><td><strong>Yes</strong></td></tr>
           <tr><td>This Booking’s legs edited</td><td><strong>Yes</strong></td></tr>
+          <tr><td>liveData only</td><td><strong>No</strong> auto re-queue</td></tr>
         </tbody>
       </table>
       <p>
-        Yards are included: topology maps, Yard setups, and Yard occupancy all
-        affect hopeful vs non-hopeful revisions.
+        Transparent path stations count when on a SAT route or needed for hope:
+        Link topology, setup, and tasking on relevant stations all affect sticky validity.
       </p>
 
       <!-- ========== RECOMMEND ========== -->
@@ -1897,10 +1945,11 @@ flowchart LR
         Those checklist items are fleshed out as concrete schemas, defaults, and tests in:
       </p>
       <div class="callout ok">
-        <strong><code>docs/BUILD_SPEC.md</code></strong> — single build contract (v1).
+        <strong><code>docs/BUILD_SPEC.md</code></strong> — primary build contract for <strong>Trackplan</strong> (v1).
         Status tags: <strong>DECIDED</strong> / <strong>DEFAULT</strong> / <strong>OPEN</strong>.
-        Includes data model, Inspector API, Yard capacity, resolve + Coupler algorithms,
-        HTTP/library API, cache rules, concurrency, goldens G1–G12, phases P0–P6, DoD.
+        Includes Station model, Prefilter + Inspector, transparent types, Assembler + Coupler,
+        edgeCost / NeighborRank / Oracle, time slices, sticky, goldens G1–G12.
+        Handoff rationale: <code>docs/SPEC.md</code> (older Class/Car/Yard wording superseded by BUILD_SPEC).
       </div>
 
       <table>
@@ -1908,53 +1957,48 @@ flowchart LR
         <tbody>
           <tr>
             <td>Canonical data model</td>
-            <td>Entity fields, ids, invariants (route may repeat Yard with different hop_key)</td>
+            <td>StationType/Station/Track/Link/Task/Request/Booking/Route; hop_key re-entry</td>
             <td>BUILD_SPEC §3</td>
           </tr>
           <tr>
-            <td>Resolve API</td>
-            <td>resolve/release payloads, FailureReport, force, sticky/negative hits</td>
-            <td>§9</td>
+            <td>Resolve / engines</td>
+            <td>Assembler agenda, Coupler couple, whole-Booking commit, FailureReport</td>
+            <td>§3.7–3.10</td>
           </tr>
           <tr>
-            <td>Policy registry</td>
-            <td>H, V, expansions, first_fit, backtrack_depth, checkpoint overrides</td>
-            <td>§7</td>
+            <td>Policy / budgets</td>
+            <td>H, V, expansions, fillFirst, checkpoint timing</td>
+            <td>BUILD_SPEC defaults</td>
           </tr>
           <tr>
-            <td>Inspector guide</td>
-            <td><code>accept / rank_cost / publish_facts / required_path_facts</code> + toy Classes</td>
-            <td>§5</td>
+            <td>Prefilter + Inspector</td>
+            <td><code>canUse</code> / <code>inspect</code> contracts + toy StationTypes</td>
+            <td>§3.7</td>
           </tr>
           <tr>
-            <td>Yard type catalog</td>
-            <td>direct/agg/expand/restricted/full + <strong>exclusive</strong> capacity v1</td>
-            <td>§6</td>
+            <td>Transparent / legalPairs</td>
+            <td>direct/agg/expand/restricted/full + exclusive capacity v1</td>
+            <td>§3.2, SPEC fabric notes</td>
           </tr>
           <tr>
-            <td>Fact schema</td>
-            <td>Context map, namespacing, Car bind + Yard <code>publish_on_hop</code></td>
-            <td>§4</td>
+            <td>Context / Task</td>
+            <td>Per-Task context accumulation; no time on Task</td>
+            <td>§3.6, §3.9b</td>
           </tr>
           <tr>
-            <td>Concurrency</td>
-            <td>Txn, lock order, no preemption v1</td>
-            <td>§11</td>
+            <td>Sticky</td>
+            <td>Relevance-scoped SAT/UNSAT cache</td>
+            <td>§3.10</td>
           </tr>
           <tr>
             <td>Golden tests</td>
             <td>G1–G12 expected behaviors + toy topology</td>
-            <td>§13</td>
+            <td>BUILD_SPEC goldens</td>
           </tr>
           <tr>
-            <td>Observability</td>
-            <td>Metrics + fail codes</td>
-            <td>§12</td>
-          </tr>
-          <tr>
-            <td>Non-goals / threats / phases</td>
-            <td>What not to build; edge cases; P0→P6 order</td>
-            <td>§2, §14–15</td>
+            <td>Non-goals</td>
+            <td>What not to build in v1 engine slice</td>
+            <td>§2</td>
           </tr>
         </tbody>
       </table>
@@ -1962,68 +2006,68 @@ flowchart LR
       <h3>Discussion map (how we “satisfy” each topic)</h3>
       <p>For each topic, you only need to <strong>confirm or override DEFAULTS</strong> — not redesign from zero:</p>
       <ol>
-        <li><strong>Data model</strong> — Confirm Port/Hop/Reservation shapes; any extra device kinds beyond Car/Yard?</li>
-        <li><strong>API</strong> — Library-only vs HTTP; auth out of scope?</li>
+        <li><strong>Data model</strong> — Confirm Track/Hop/Task shapes; any types beyond Refrigerated/Normal/Docking/Switch?</li>
+        <li><strong>API</strong> — Library-only vs HTTP; Kafka adapters after domain (BUILD_SPEC §1).</li>
         <li><strong>Policy numbers</strong> — Are H=16, V=3, max_expansions=50k, wall=500ms acceptable?</li>
-        <li><strong>Inspector</strong> — Real Class request schemas (beyond toy Refrigerated/Normal/Docking)?</li>
-        <li><strong>Yard capacity</strong> — Accept exclusive-only v1, or need combine/share day one?</li>
-        <li><strong>Facts</strong> — Production key names for stamps/cabinets; which Yards publish on hop?</li>
-        <li><strong>Claims</strong> — Hard reserve on SAT only (spec) vs hold during preview?</li>
-        <li><strong>Goldens</strong> — Extend G* with your real topology fixtures later.</li>
-        <li><strong>Stack</strong> — Language/DB choice (spec is language-agnostic).</li>
+        <li><strong>Inspector</strong> — Real request schemas (beyond toy Refrigerated/Normal/Docking)?</li>
+        <li><strong>Transparent capacity</strong> — Accept exclusive-only v1, or need combine/share day one?</li>
+        <li><strong>Context keys</strong> — Production stamp/cabinet names; which transparent stations publish?</li>
+        <li><strong>Commit</strong> — Whole-Booking only (DECIDED); working overlay path-local.</li>
+        <li><strong>Goldens</strong> — Extend G* with real topology fixtures later.</li>
+        <li><strong>Stack</strong> — Kotlin (JVM) preferred; BUILD_SPEC is language-agnostic on schemas.</li>
       </ol>
 
       <!-- ========== OPEN ========== -->
       <h2 id="open">Open questions (with v1 defaults)</h2>
       <p>
         Nothing here should block a first implementation. Defaults live in
-        <code>BUILD_SPEC.md</code> §7 and §18. Confirm before production.
+        <code>BUILD_SPEC.md</code>. Confirm before production.
       </p>
       <table>
         <thead><tr><th>Question</th><th>DEFAULT v1</th><th>What to discuss to finalize</th></tr></thead>
         <tbody>
           <tr>
             <td>Aggregator / expander capacity</td>
-            <td><strong>Exclusive</strong> ports (no RF combine)</td>
+            <td><strong>Exclusive</strong> tracks (no multi-Booking share)</td>
             <td>Do any real junctions require multi-Booking share on Ag?</td>
           </tr>
           <tr>
             <td>Backtrack when checkpoint blocks later leg</td>
-            <td><strong>0</strong> — fail + report checkpoints</td>
-            <td>Is reopen-last-Class required for success rate?</td>
+            <td>Agenda alts + clear checkpoint if backtrack through type; DEFAULT fail + report</td>
+            <td>How deep reopen-last-type for success rate?</td>
           </tr>
           <tr>
             <td>First-fit vs score all multi-sink goals</td>
-            <td><strong>First-fit</strong> in rank order</td>
+            <td><strong>First-fit</strong> agenda order (edgeCost + NeighborRank)</td>
             <td>Need best path among K goals for cost reasons?</td>
           </tr>
           <tr>
             <td>Leg 1 entry / fabric</td>
-            <td><strong>Bind first Car without fabric</strong>; Coupler from leg 1→2</td>
-            <td>Must leg 1 attach through a fixed headend Yard?</td>
+            <td><strong>Virtual source S0</strong>; no input tracks used on first type; Coupler for segment 1→2</td>
+            <td>Must first type attach through a fixed headend switch?</td>
           </tr>
           <tr>
-            <td>UNSAT cache invalidation</td>
-            <td><strong>Hopeful events only</strong> (not every new claim)</td>
-            <td>Fine-grained deps vs simple hopeful_rev counter?</td>
+            <td>UNSAT sticky invalidation</td>
+            <td><strong>Hopeful events only</strong>, relevance-scoped (not every new tasking)</td>
+            <td>Fine-grained deps vs epoch maps?</td>
           </tr>
           <tr>
             <td>Path-acquired Context</td>
-            <td>Coupler state <strong>port + Context</strong>; Yard <code>publish_on_hop</code></td>
+            <td>Candidate Task.context seeded from previous hop; inspector extends</td>
             <td>Prefer mandatory waypoints API instead of mid-search facts?</td>
           </tr>
           <tr>
-            <td>Which Yards publish facts</td>
-            <td>Per-instance list; empty default; toy Y2 stamps</td>
+            <td>Which transparent stations publish facts</td>
+            <td>Per-type/instance; empty default; toy Y2 stamps</td>
             <td>Enumerate production publishers</td>
           </tr>
         </tbody>
       </table>
 
       <footer class="note">
-        Living design note. Walkthroughs are illustrative.
-        <strong>Build from:</strong> <code>docs/BUILD_SPEC.md</code> · Index:
-        <code>docs/README.md</code>.
+        Living design note for <strong>Trackplan</strong>. Walkthroughs are illustrative toy narratives.
+        <strong>Build from:</strong> <code>docs/BUILD_SPEC.md</code> (primary) ·
+        <code>docs/SPEC.md</code> (handoff) · Index: <code>docs/README.md</code>.
       </footer>
     </main>
   </div>
@@ -2034,16 +2078,16 @@ flowchart LR
      *   R-17 ──► Y1 ──► N-* ──► D-*
      *            │ └─► Y2 ──► N-*  (Y2 also publishes clearance stamp)
      *            └──────────────► (Y1↔Y2 loopback)
-     * Y1 connects to BOTH Y2 and N so short path Y1→N and multi-yard Y1→Y2→N can play.
+     * Y1 connects to BOTH Y2 and N so short path Y1→N and multi-switch Y1→Y2→N can play.
      */
     /**
-     * Port-level fabric for hop-accurate viz.
-     * Hop syntax: in:DEVICE:out  e.g. 1:Y1:1  or  5:Y1:6
+     * Track-level fabric for hop-accurate viz.
+     * Hop syntax: in:STATION:out  e.g. 1:Y1:1  or  5:Y1:6
      * Y1 legal pairs: 1→1 (to N short or toward Y2 via out1/out2), 5→6 after re-entry.
      * Y1 illegal: 1→6 (shown dashed — never a real hop).
      */
     // Layout: columns R | Y1 | Y2 | N | D
-    // No yard multiplex: each OUT track has at most one cable.
+    // No switch multiplex: each OUT track has at most one Link.
     //   Y1 out1 → N-04 · out2 → Y2 in1 · out3 → N-08 · out6 → N-12 (only after re-entry in5)
     //   Y2 out5 → N-04 · out6 → Y1 in5 (loopback)
     //   Illegal Y1 1→6 forces loopback to use out6 for N-12.
@@ -2074,7 +2118,7 @@ flowchart LR
       },
     };
 
-    // Cables: from [device, outTrack] → [device, inTrack] — 1:1 outs
+    // Links: from [station, outTrack] → [station, inTrack] — 1:1 outs
     const CABLES = [
       { id: "e_r_y1", from: ["R-17", "1"], to: ["Y1", "1"] },
       { id: "e_y1_n", from: ["Y1", "1"], to: ["N-04", "1"] },
@@ -2142,13 +2186,13 @@ flowchart LR
     }
 
     /**
-     * Highlight internals + cables from hop list.
+     * Highlight internals + Links from hop list.
      * hopsActive: index of active hop, or -1 = entire list is committed (done).
      *
-     * Cables are ONLY the path edges:
+     * Links are ONLY the path edges:
      *   (1) between consecutive hops (prev.out → curr.in) — authoritative
      *   (2) unique entry into the first hop (e.g. R→Y1 when R is not itself a hop)
-     * Never light every cable that shares a port — N-04 in/out1 fans to Y2 and D-11.
+     * Never light every Link that shares a track — N-04 in/out1 fans to Y2 and D-11.
      * Explicit step.edgesOn / edgesDone still merge in paintFabric.
      */
     function hopToHighlights(hops, hopsActive) {
@@ -2174,7 +2218,7 @@ flowchart LR
         if (!cableState[id] || rank[state] > rank[cableState[id]]) cableState[id] = state;
       }
 
-      // Yard crosspoints + ports only — no fan-out cables on shared ports
+      // Switch crosspoints + tracks only — no fan-out Links on shared tracks
       function applyHop(p, state) {
         if (!p || !state) return;
         const dev = normalizeDevice(p.device);
@@ -2191,7 +2235,7 @@ flowchart LR
         if (st) applyHop(p, st);
       });
 
-      // Consecutive hops: cable from prev.out → curr.in (the only multi-edge-safe rule)
+      // Consecutive hops: Link from prev.out → curr.in (the only multi-edge-safe rule)
       for (let k = 0; k < parsed.length - 1; k++) {
         const stA = hopState(parsed[k].i);
         const stB = hopState(parsed[k + 1].i);
@@ -2206,8 +2250,8 @@ flowchart LR
         if (cab) bumpCable(cab.id, st);
       }
 
-      // Entry into first hop when exactly one cable lands on that in-port (R→Y1).
-      // Skip when fan-in (N-04 has Y1 short + Y2) so we do not light the wrong corridor.
+      // Entry into first hop when exactly one Link lands on that in-track (R→Y1).
+      // Skip when fan-in (N-04 has Y1 short + Y2 Links) so we do not light the wrong corridor.
       if (parsed.length) {
         const first = parsed[0];
         const st0 = hopState(first.i);
@@ -2232,34 +2276,34 @@ flowchart LR
       {
         id: "simple",
         title: "1 · Simple",
-        blurb: "One Coupler (A*) call = whole segment R→…→N (Yards inside). Assembler does not get a turn at Y1. Then a second Coupler call for N→…→D.",
+        blurb: "One Coupler (A*) call = whole segment R→…→N (transparent switches inside). Assembler does not get a turn at Y1. Then a second Coupler call for N→…→D.",
         legs: ["R", "N (1 A* segment)", "D (1 A* segment)"],
         steps: [
           {
             phase: "assembler", leg: -1, meta: "Assembler · start",
-            title: "Empty consist · Booking received",
-            body: "Outer loop only. No A* yet. Consist empty, Context empty.",
+            title: "Empty route · Booking received",
+            body: "Outer loop only. No A* yet. Bindings empty, Context empty.",
             consist: [], ctx: "(empty)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
-            notes: "<strong>Assembler</strong> owns Class legs. <strong>Coupler/A*</strong> owns fabric between two Class Cars.",
+            notes: "<strong>Assembler</strong> owns demand StationType legs. <strong>Coupler/A*</strong> owns fabric between two demand Stations.",
           },
           {
             phase: "assembler", leg: 0, meta: "Assembler · leg R",
             title: "Pick & bind R-17 (no Coupler)",
-            body: "First leg: no prior tail. Assembler runs RefrigeratedInspector, binds <strong>R-17</strong>, checkpoints. Fabric not searched yet.",
+            body: "First type is entry-special: virtual source, no input tracks used. Assembler Prefilters Refrigerated Stations, binds <strong>R-17</strong>, starts Task context. Fabric path not required yet.",
             consist: [{ id: "R-17", cls: "a", locked: true }],
             ctx: "cabinets=4 · closed: Refrigerated",
             candidates: [
-              { id: "R-17", st: "picked", stage: "prefilter", why: "prefilter+bind: 4N OK (first leg, accept=prefilter)" },
-              { id: "R-22", st: "pass", stage: "prefilter", why: "prefilter OK · not chosen" },
+              { id: "R-17", st: "picked", stage: "prefilter", why: "Prefilter+bind: 4N OK (first type; inspect ≈ Prefilter, no path)" },
+              { id: "R-22", st: "pass", stage: "prefilter", why: "Prefilter OK · not chosen" },
             ],
             hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
-            notes: "First leg: no path yet, so prefilter ≈ full check. Tail = R-17 for next Coupler.",
+            notes: "First type: no path yet, so Prefilter ≈ full check. Tail = R-17 for next Coupler.",
           },
           {
             phase: "assembler", leg: 1, meta: "Assembler · leg N prep",
-            title: "prefilter Normal · request seats &gt; 5",
-            body: "Leg wants Class Normal with <strong>&gt; 5 seats</strong>. Assembler <code>prefilter</code> only: N-08 has 4 seats → drop (no path can add seats). N-04 (8) and N-12 (12) pass. Full Inspector <code>accept</code> (e.g. can route track 1→2) is <em>not</em> run yet.",
+            title: "Prefilter Normal · request seats &gt; 5",
+            body: "Leg wants StationType Normal with <strong>&gt; 5 seats</strong>. Assembler <code>Prefilter</code> only: N-08 has 4 seats → drop (no path can add seats). N-04 (8) and N-12 (12) pass. Full <code>Inspector.inspect</code> (e.g. can route track 1→2) is <em>not</em> run yet.",
             consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
             ctx: "cabinets=4 · closed: Refrigerated · request min_seats=6",
             candidates: [
@@ -2270,18 +2314,18 @@ flowchart LR
             hops: [], hopsActive: -1,
             nodesOn: ["r17", "n04", "n12", "y1"],
             edgesOn: [], edgesDone: [],
-            notes: "prefilter = Assembler. Goals for Coupler = N-04, N-12 only. Track 1→2 checked later in accept.",
+            notes: "Prefilter = Assembler. Goals for Coupler = N-04, N-12 only. Track 1→2 checked later in inspect.",
           },
           {
             phase: "coupler", leg: 1, meta: "A* expand 1 · same call",
             title: "Inner A* reaches Y1 (still one Coupler call)",
-            body: "A* expands R→Y1, hop <code>1:Y1:1</code>. Assembler waiting. Goals are prefilter-passers only (N-04, N-12). <code>accept()</code> not run until a goal port is reached.",
+            body: "A* expands R→Y1, hop <code>1:Y1:1</code>. Assembler waiting. Goals are Prefilter-passers only (N-04, N-12). <code>inspect</code> not run until a goal Station is reached.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→1 expanding", active: true },
               { id: "?", cls: "b", ghost: true },
             ],
-            ctx: "cabinets=4 · (path Context mid-search)",
+            ctx: "cabinets=4 · (Task context mid-search)",
             candidates: [
               { id: "N-04", st: "pass", stage: "prefilter", why: "goal not reached yet" },
               { id: "N-12", st: "pass", stage: "prefilter", why: "goal not reached yet" },
@@ -2290,12 +2334,12 @@ flowchart LR
             nodesOn: ["r17", "y1"],
             edgesOn: ["e_r_y1"],
             edgesDone: [],
-            notes: "Partial path inside one A* run. N-08 never a goal (failed prefilter seats).",
+            notes: "Partial path inside one A* run. N-08 never a goal (failed Prefilter seats).",
           },
           {
             phase: "coupler", leg: 1, meta: "A* goal · same call",
-            title: "accept() at N-04 · full Inspector on arrival",
-            body: "Same Coupler call: path arrives N-04 on track 1, needs out track 1 (or 2). <code>accept()</code> runs thorough checks (seats again + <strong>can_route in→out</strong> + path Context). Pass → return hops + car to Assembler.",
+            title: "inspect at N-04 · full Inspector on arrival",
+            body: "Same Coupler call: path arrives N-04 on track 1, needs out track 1 (or 2). <code>inspect(setup, tasking, request, liveData)</code> runs thorough checks (seats again + <strong>can_route in→out</strong> + Task context). Pass → return hops + station to Assembler.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→1" },
@@ -2303,19 +2347,19 @@ flowchart LR
             ],
             ctx: "cabinets=4 · seats=8 · closed: Refrigerated, Normal",
             candidates: [
-              { id: "N-04", st: "picked", stage: "accept", why: "accept OK · seats 8 + route track 1→1" },
+              { id: "N-04", st: "picked", stage: "accept", why: "inspect OK · seats 8 + route track 1→1" },
               { id: "N-12", st: "pass", stage: "prefilter", why: "still a goal · not reached first" },
             ],
             hops: ["1:Y1:1", "1:N-04:1"], hopsActive: 1,
             nodesOn: ["r17", "y1", "n04"],
             edgesOn: ["e_y1_n"],
             edgesDone: ["e_r_y1"],
-            notes: "One Coupler invocation = entire segment <strong>R → Y1 → N</strong>. There is no separate Assembler step “go to Y1.”",
+            notes: "One Coupler invocation = entire segment <strong>R → Y1 → N</strong>. Assembler never steps transparent Y1 as a demand leg.",
           },
           {
             phase: "assembler", leg: 1, meta: "Assembler · after Coupler",
             title: "Assembler commits N-04 + full hop list",
-            body: "Assembler appends the returned hops to the Booking route, merges facts, checkpoints Normal, sets <code>tail = N-04</code>. Ready for Docking leg.",
+            body: "Assembler appends the returned hops to the Booking route, merges Task context, checkpoints Normal (when timing allows), sets <code>tail = N-04</code>. Ready for Docking leg.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "from segment 1" },
@@ -2327,12 +2371,12 @@ flowchart LR
             nodesOn: ["r17", "y1", "n04"],
             edgesOn: [],
             edgesDone: ["e_r_y1", "e_y1_n"],
-            notes: "Consist & path now shows Y1 because the <em>returned route</em> included it — not because Assembler navigated there.",
+            notes: "Route/bindings now show Y1 because the <em>returned route</em> included it — not because Assembler navigated there.",
           },
           {
             phase: "coupler", leg: 2, meta: "A* segment 2",
             title: "New Coupler call: N-04 → D-*",
-            body: "Second inner run. Starts = N-04 outs, goals = Docking ports. Independent of the first A* (except reserved capacity / Context).",
+            body: "Second inner run. Starts = N-04 OUT tracks, goals = Docking Stations. Independent of the first A* (except tasking capacity / Task context).",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "prior segment" },
@@ -2345,12 +2389,12 @@ flowchart LR
             nodesOn: ["n04", "d02"],
             edgesOn: ["e_n_d"],
             edgesDone: ["e_r_y1", "e_y1_n"],
-            notes: "Two Coupler calls total for three Class legs: (1) after R toward N, (2) after N toward D. First leg R needed no Coupler.",
+            notes: "Two Coupler calls total for three demand legs: (1) after R toward N, (2) after N toward D. First type R used virtual source / entry-special.",
           },
           {
             phase: "system", leg: 2, meta: "SAT",
             title: "Booking SAT",
-            body: "Sticky stores consist + full route (all hops from every Coupler return).",
+            body: "Sticky stores plan: bindings + full route (all hops from every Coupler return). Whole-Booking commit.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "seg1" },
@@ -2361,20 +2405,20 @@ flowchart LR
             hops: ["1:Y1:1", "1:N-04:1", "1:D-02:1"], hopsActive: -1,
             nodesOn: ["r17", "y1", "n04", "d02"],
             edgesOn: [], edgesDone: ["e_r_y1", "e_y1_n", "e_n_d"],
-            notes: "Mental model: Assembler steps Class→Class; each Coupler call fills in the Yards/cables between.",
+            notes: "Mental model: Assembler steps demand StationType→StationType; each Coupler call fills transparent Stations/Links between.",
           },
         ],
       },
       {
         id: "multiyard",
-        title: "2 · Multi-Yard + path Context",
-        blurb: "Short Y1→N wires exist but accept fails without y2_stamp (path Context). Coupler keeps expanding → Y2 publishes stamp → Y2→N-04 accepts. One scenario: multi-Yard discovery + why Context forces detours.",
+        title: "2 · Multi-switch + Task context",
+        blurb: "Short Y1→N Links exist but inspect fails without y2_stamp (Task context). Coupler keeps expanding → Y2 publishes stamp → Y2→N-04 inspect OK. Multi-switch discovery + why context forces detours.",
         legs: ["R fresh", "N short fails stamp", "via Y2", "D"],
         steps: [
           {
             phase: "assembler", leg: -1, meta: "Fresh resolve",
-            title: "Empty consist · Booking received",
-            body: "Assembler starts with <strong>no Cars bound</strong>, empty Context, empty route. Legs: Refrigerated → Normal → Docking.",
+            title: "Empty route · Booking received",
+            body: "Assembler starts with <strong>no Stations bound</strong>, empty Context, empty route. Demand legs: Refrigerated → Normal → Docking.",
             consist: [], ctx: "(empty)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
             notes: "Same cold start as Simple — nothing pre-bound.",
@@ -2382,20 +2426,20 @@ flowchart LR
           {
             phase: "assembler", leg: 0, meta: "Leg R",
             title: "Bind Refrigerated R-17",
-            body: "Inspector accepts R-17 (4N). Publish <code>cabinets=4</code>. Checkpoint Refrigerated. Still <strong>no</strong> <code>y2_stamp</code>.",
+            body: "Prefilter+inspect accepts R-17 (4N). Task context publishes <code>cabinets=4</code>. Checkpoint Refrigerated (timing simplified). Still <strong>no</strong> <code>y2_stamp</code>.",
             consist: [{ id: "R-17", cls: "a", locked: true }],
             ctx: "cabinets=4 · closed: Refrigerated · y2_stamp: missing",
             candidates: [
-              { id: "R-17", st: "picked", stage: "prefilter", why: "prefilter+bind: 4N OK" },
-              { id: "R-22", st: "pass", stage: "prefilter", why: "prefilter OK" },
+              { id: "R-17", st: "picked", stage: "prefilter", why: "Prefilter+bind: 4N OK" },
+              { id: "R-22", st: "pass", stage: "prefilter", why: "Prefilter OK" },
             ],
             hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
-            notes: "Tail = R-17 for next Coupler. Normal leg next — seats prefilter then accept at goal.",
+            notes: "Tail = R-17 for next Coupler. Normal leg next — seats Prefilter then inspect at goal.",
           },
           {
             phase: "assembler", leg: 1, meta: "Leg N · goals",
-            title: "prefilter Normal · seats &gt; 5 (no stamp check yet)",
-            body: "Request min_seats=6. <strong>prefilter</strong>: N-08 (4 seats) dropped. N-04/N-12 pass. Stamp / track 1→2 are <em>not</em> prefilter — those wait for <code>accept()</code> at the Car after a path.",
+            title: "Prefilter Normal · seats &gt; 5 (no stamp check yet)",
+            body: "Request min_seats=6. <strong>Prefilter</strong>: N-08 (4 seats) dropped. N-04/N-12 pass. Stamp / track 1→2 are <em>not</em> Prefilter — those wait for <code>inspect</code> at the Station after a path.",
             consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
             ctx: "cabinets=4 · y2_stamp: missing · min_seats=6",
             candidates: [
@@ -2410,8 +2454,8 @@ flowchart LR
           },
           {
             phase: "coupler", leg: 1, meta: "Try 1 · N-04 short",
-            title: "Try cable Y1 out1 → N-04",
-            body: "Cheapest path: hop <code>1:Y1:1</code>, cable <strong>Y1→N-04</strong>. Arrive without stamp → Inspector <strong>rejects</strong>. Do not bind. Keep searching.",
+            title: "Try Link Y1 out1 → N-04",
+            body: "Cheapest path: hop <code>1:Y1:1</code>, Link <strong>Y1→N-04</strong>. Arrive without stamp → Inspector <strong>rejects</strong>. Do not bind. Keep searching.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→1 short", active: true },
@@ -2419,20 +2463,20 @@ flowchart LR
             ],
             ctx: "y2_stamp: still missing",
             candidates: [
-              { id: "N-04", st: "fail", stage: "accept", why: "accept: missing y2_stamp (path Context)" },
+              { id: "N-04", st: "fail", stage: "accept", why: "inspect: missing y2_stamp (Task context)" },
               { id: "N-12", st: "pass", stage: "prefilter", why: "still an A* goal · not tried this expansion" },
             ],
-            hops: ["1:Y1:1", "1:N-04:1", "✗ accept"], hopsActive: 0,
+            hops: ["1:Y1:1", "1:N-04:1", "✗ inspect"], hopsActive: 0,
             nodesOn: ["r17", "y1", "n04"],
             edgesOn: ["e_r_y1", "e_y1_n"],
             edgesDone: [],
             edgesBlocked: [],
-            notes: "Cyan under test: hop <code>1:Y1:1</code> → <strong>Y1 out1 → N-04</strong>. N-12 is not on a short out from in1 (illegal 1→6; only via re-entry out6).",
+            notes: "Cyan under test: hop <code>1:Y1:1</code> → <strong>Y1 out1 → N-04</strong> (Link). N-12 is not on a short out from in1 (illegal 1→6; only via re-entry out6).",
           },
           {
             phase: "coupler", leg: 1, meta: "Expand Y2",
             title: "Continue → hop 1:Y1:2 toward Y2",
-            body: "Hop <code>1:Y1:2</code> onto cable <strong>Y1→Y2</strong>. Goals N-04/N-12 still open. N-12 cannot be reached without later re-entry.",
+            body: "Hop <code>1:Y1:2</code> onto Link <strong>Y1→Y2</strong>. Goals N-04/N-12 still open. N-12 cannot be reached without later re-entry.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→2", active: true },
@@ -2449,12 +2493,12 @@ flowchart LR
             edgesOn: ["e_y1_y2"],
             edgesDone: ["e_r_y1"],
             edgesBlocked: ["e_y1_n"],
-            notes: "Cyan Y1→Y2. Short Y1→N-04 red (accept failed on stamp).",
+            notes: "Cyan Y1→Y2. Short Y1→N-04 red (inspect failed on stamp).",
           },
           {
-            phase: "coupler", leg: 1, meta: "Stamp + accept",
-            title: "accept() at N-04 after Y2 stamp",
-            body: "Y2 hop publishes stamp. Cable <strong>Y2 out5 → N-04</strong> is free. <code>accept()</code>: seats OK, stamp OK → success. (If this cable were closed, search would loop back — see scenario Loopback.)",
+            phase: "coupler", leg: 1, meta: "Stamp + inspect",
+            title: "inspect at N-04 after Y2 stamp",
+            body: "Y2 hop publishes stamp into Task context. Link <strong>Y2 out5 → N-04</strong> is free. <code>inspect</code>: seats OK, stamp OK → success. (If this Link were closed, search would loop back — see scenario Loopback.)",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→2" },
@@ -2463,7 +2507,7 @@ flowchart LR
             ],
             ctx: "cabinets=4 · y2_stamp: ok · seats=8 · closed: Refrigerated, Normal",
             candidates: [
-              { id: "N-04", st: "picked", stage: "accept", why: "accept OK · stamp + Y2:5 free" },
+              { id: "N-04", st: "picked", stage: "accept", why: "inspect OK · stamp + Y2:5 free" },
               { id: "N-12", st: "pass", stage: "prefilter", why: "not needed — N-04 succeeded first" },
             ],
             hops: ["1:Y1:2", "1:Y2:5", "1:N-04:1"], hopsActive: 2,
@@ -2475,7 +2519,7 @@ flowchart LR
           },
           {
             phase: "system", leg: 2, meta: "Finish D",
-            title: "N → D · multi-Yard SAT",
+            title: "N → D · multi-switch SAT",
             body: "Full path: R — Y1 — Y2 — N-04 — D.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
@@ -2491,7 +2535,7 @@ flowchart LR
             edgesOn: [],
             edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_n", "e_n_d"],
             edgesBlocked: ["e_y1_n"],
-            notes: "Happy multi-Yard when Y2→N-04 is free. Contrast: Loopback scenario when that cable is closed.",
+            notes: "Happy multi-switch path when Y2→N-04 is free. Contrast: Loopback scenario when that Link is closed.",
           },
         ],
       },
@@ -2503,12 +2547,12 @@ flowchart LR
         steps: [
           {
             phase: "assembler", leg: -1, meta: "Fresh resolve",
-            title: "Empty consist · Booking received",
-            body: "Cold start. World fact: cable <strong>Y2 out5 → N-04 is closed</strong> (capacity / reserved).",
+            title: "Empty route · Booking received",
+            body: "Cold start. World fact: Link <strong>Y2 out5 → N-04 is closed</strong> (capacity / reserved).",
             consist: [], ctx: "(empty)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
             edgesBlocked: ["e_y2_n"],
-            notes: "Same fabric as Multi-Yard; only occupancy differs on e_y2_n.",
+            notes: "Same fabric as multi-switch scenario; only occupancy differs on e_y2_n.",
           },
           {
             phase: "assembler", leg: 0, meta: "Leg R",
@@ -2516,14 +2560,14 @@ flowchart LR
             body: "Refrigerated OK. <code>y2_stamp</code> still missing.",
             consist: [{ id: "R-17", cls: "a", locked: true }],
             ctx: "cabinets=4 · closed: Refrigerated · y2_stamp: missing",
-            candidates: [{ id: "R-17", st: "picked", stage: "prefilter", why: "prefilter+bind OK" }],
+            candidates: [{ id: "R-17", st: "picked", stage: "prefilter", why: "Prefilter+bind OK" }],
             hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
             edgesBlocked: ["e_y2_n"],
             notes: "Tail = R-17.",
           },
           {
-            phase: "assembler", leg: 1, meta: "prefilter N",
-            title: "prefilter Normal · seats &gt; 5",
+            phase: "assembler", leg: 1, meta: "Prefilter N",
+            title: "Prefilter Normal · seats &gt; 5",
             body: "N-08 dropped (seats). N-04 and N-12 remain goals. Stamp not checked here.",
             consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
             ctx: "cabinets=4 · y2_stamp: missing · min_seats=6",
@@ -2540,8 +2584,8 @@ flowchart LR
           },
           {
             phase: "coupler", leg: 1, meta: "Short N-04",
-            title: "Short Y1→N-04 · accept fails (stamp)",
-            body: "Try hop <code>1:Y1:1</code> → N-04. Wire free; <code>accept()</code> rejects — missing <code>y2_stamp</code>. Keep searching (same Coupler call).",
+            title: "Short Y1→N-04 · inspect fails (stamp)",
+            body: "Try hop <code>1:Y1:1</code> → N-04. Link free; <code>inspect</code> rejects — missing <code>y2_stamp</code>. Keep searching (same Coupler call).",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→1", active: true },
@@ -2549,15 +2593,15 @@ flowchart LR
             ],
             ctx: "y2_stamp: still missing",
             candidates: [
-              { id: "N-04", st: "fail", stage: "accept", why: "accept: missing y2_stamp" },
+              { id: "N-04", st: "fail", stage: "accept", why: "inspect: missing y2_stamp" },
               { id: "N-12", st: "pass", stage: "prefilter", why: "still a goal" },
             ],
-            hops: ["1:Y1:1", "1:N-04:1", "✗ accept"], hopsActive: 0,
+            hops: ["1:Y1:1", "1:N-04:1", "✗ inspect"], hopsActive: 0,
             nodesOn: ["r17", "y1", "n04"],
             edgesOn: ["e_r_y1", "e_y1_n"],
             edgesDone: [],
             edgesBlocked: ["e_y2_n"],
-            notes: "Fail is Context, not the closed Y2→N-04 cable.",
+            notes: "Fail is Context, not the closed Y2→N-04 Link.",
           },
           {
             phase: "coupler", leg: 1, meta: "Y2 enter",
@@ -2579,12 +2623,12 @@ flowchart LR
             edgesOn: ["e_y1_y2"],
             edgesDone: ["e_r_y1"],
             edgesBlocked: ["e_y1_n", "e_y2_n"],
-            notes: "Y2→N-04 already known closed (red) — search will not commit that cable.",
+            notes: "Y2→N-04 already known closed (red) — search will not commit that Link.",
           },
           {
             phase: "coupler", leg: 1, meta: "Y2→N-04 blocked",
             title: "Y2 out5 → N-04 closed · skip",
-            body: "Out5 cable is <strong>CAPACITY_BLOCKED</strong>. Cannot arrive N-04 this way. Same Coupler call: try Y2 out6 (loopback) instead.",
+            body: "Out5 Link is <strong>CAPACITY_BLOCKED</strong>. Cannot arrive N-04 this way. Same Coupler call: try Y2 out6 (loopback) instead.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "prior" },
@@ -2606,7 +2650,7 @@ flowchart LR
           {
             phase: "coupler", leg: 1, meta: "Loopback",
             title: "Loopback Y2 out6 → Y1 in5 → out6",
-            body: "Hop <code>1:Y2:6</code> (IN1→OUT6) publishes stamp, cable to <strong>Y1 IN 5</strong>, then internal <code>5:Y1:6</code> (legal). Illegal <code>1→6</code> never used.",
+            body: "Hop <code>1:Y2:6</code> (IN1→OUT6) publishes stamp, Link to <strong>Y1 IN 5</strong>, then internal <code>5:Y1:6</code> (legal). Illegal <code>1→6</code> never used.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "re-enter 5→6", active: true },
@@ -2615,19 +2659,19 @@ flowchart LR
             ],
             ctx: "y2_stamp: ok · re-entered Y1",
             candidates: [
-              { id: "N-12", st: "pass", stage: "prefilter", why: "next cable Y1:6→N-12" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "next Link Y1:6→N-12" },
             ],
             hops: ["1:Y1:2", "1:Y2:6", "5:Y1:6"], hopsActive: 2,
             nodesOn: ["y1", "y2"],
             edgesOn: ["e_y2_y1"],
             edgesDone: ["e_r_y1", "e_y1_y2"],
             edgesBlocked: ["e_y1_n", "e_y2_n"],
-            notes: "Two Y1 hop_keys: 1→2 then 5→6. Same yard, different ports.",
+            notes: "Two Y1 hop_keys: 1→2 then 5→6. Same switch Station, different tracks.",
           },
           {
-            phase: "coupler", leg: 1, meta: "N-12 accept",
-            title: "Y1 out6 → N-12 · accept OK",
-            body: "Internal <code>5:Y1:6</code> then cable <strong>out6 → N-12</strong>. <code>accept()</code>: seats OK + stamp from Y2 on path Context → bind N-12.",
+            phase: "coupler", leg: 1, meta: "N-12 inspect",
+            title: "Y1 out6 → N-12 · inspect OK",
+            body: "Internal <code>5:Y1:6</code> then Link <strong>out6 → N-12</strong>. <code>inspect</code>: seats OK + stamp from Y2 on Task context → bind N-12.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "5→6" },
@@ -2637,7 +2681,7 @@ flowchart LR
             ctx: "cabinets=4 · y2_stamp: ok · seats=12 · closed: Refrigerated, Normal",
             candidates: [
               { id: "N-04", st: "fail", stage: "accept", why: "Y2→N-04 closed" },
-              { id: "N-12", st: "picked", stage: "accept", why: "accept OK via re-entry" },
+              { id: "N-12", st: "picked", stage: "accept", why: "inspect OK via re-entry" },
             ],
             hops: ["1:Y1:2", "1:Y2:6", "5:Y1:6", "1:N-12:1"], hopsActive: 3,
             nodesOn: ["y1", "y2", "n12"],
@@ -2669,7 +2713,7 @@ flowchart LR
           {
             phase: "system", leg: 1, meta: "Anti-loop lesson",
             title: "Useful re-entry ≠ infinite loopback",
-            body: "Without guards, after failing Y2→N-04 the search could bounce <strong>Y1↔Y2 forever</strong> (same ports, no progress). That is oscillation — not the legal re-entry we just used.",
+            body: "Without guards, after failing Y2→N-04 the search could bounce <strong>Y1↔Y2 forever</strong> (same tracks, no progress). That is oscillation — not the legal re-entry we just used.",
             consist: [
               { id: "Y1", cls: "yard", hop: "1→2 already used", active: true },
               { id: "Y2", cls: "yard", hop: "1→6 already used", active: true },
@@ -2700,13 +2744,13 @@ flowchart LR
             edgesBlocked: ["e_y2_n"],
             failure: `{
   // Anti-loop / budget (DEFAULT v1)
-  forbid_repeat_hop_key: true,     // hop_key = (device, in, out) unique on path
-  // optional: forbid_immediate_cable_backtrack
-  max_visits_per_yard: 3,          // V — hard cap even with new hop_keys
+  forbid_repeat_hop_key: true,     // hop_key = (stationId, in, out) unique on path
+  // optional: forbid_immediate_link_backtrack
+  max_visits_per_station: 3,       // V — hard cap even with new hop_keys
   max_hops: 16,                    // H
   max_expansions: 50_000,
   max_wall_ms: 500,
-  // Closed set: (port, context_fingerprint) so accept-reject at N
+  // Closed set: (track-state, context_fingerprint) so inspect-reject at N
   // does not permanently kill later stamp paths — but hop_key still unique
   on_exceed: "BUDGET"              // finite UNSAT, never hang
 }`,
@@ -2717,12 +2761,12 @@ flowchart LR
       {
         id: "prefilter",
         title: "4 · Prefilter rejection",
-        blurb: "Fresh start → bind R → all Normal Cars fail Assembler prefilter (zero Coupler goals; accept never runs).",
-        legs: ["R fresh", "N prefilter empty"],
+        blurb: "Fresh start → bind R → all Normal Stations fail Assembler Prefilter (zero Coupler goals; inspect never runs).",
+        legs: ["R fresh", "N Prefilter empty"],
         steps: [
           {
             phase: "assembler", leg: -1, meta: "Fresh resolve",
-            title: "Empty consist · Booking received",
+            title: "Empty route · Booking received",
             body: "No bounds yet.",
             consist: [], ctx: "(empty)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
@@ -2734,14 +2778,14 @@ flowchart LR
             body: "Refrigerated prefilter+bind OK. cabinets=4.",
             consist: [{ id: "R-17", cls: "a", locked: true }],
             ctx: "cabinets=4 · closed: Refrigerated · min_seats=6",
-            candidates: [{ id: "R-17", st: "picked", stage: "prefilter", why: "prefilter+bind OK" }],
+            candidates: [{ id: "R-17", st: "picked", stage: "prefilter", why: "Prefilter+bind OK" }],
             hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
             notes: "Next: Normal prefilter only — Coupler never starts if zero goals.",
           },
           {
-            phase: "assembler", leg: 1, meta: "prefilter pool",
-            title: "All Normal Cars fail prefilter",
-            body: "Request seats &gt; 5 plus a hard protocol flag. <strong>prefilter</strong> drops everyone path-independently (N-08 seats; N-04/N-12 protocol never supported). No Coupler call — no fabric, no accept().",
+            phase: "assembler", leg: 1, meta: "Prefilter pool",
+            title: "All Normal Stations fail Prefilter",
+            body: "Request seats &gt; 5 plus a hard protocol flag. <strong>Prefilter</strong> drops everyone path-independently (N-08 seats; N-04/N-12 protocol never supported). No Coupler call — no fabric, no inspect().",
             consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
             ctx: "cabinets=4 · min_seats=6",
             candidates: [
@@ -2751,12 +2795,12 @@ flowchart LR
             ],
             hops: [], hopsActive: -1,
             nodesOn: ["n04", "n08", "n12"], edgesOn: [], edgesDone: [],
-            notes: "All fails are prefilter (Assembler). accept() never ran.",
+            notes: "All fails are Prefilter (Assembler). inspect never ran.",
           },
           {
             phase: "fail", leg: 1, meta: "UNSAT",
-            title: "NO_CANDIDATES (prefilter empty)",
-            body: "No Coupler goals. Failure is Assembler-level prefilter, not track routing.",
+            title: "NO_CANDIDATES (Prefilter empty)",
+            body: "No Coupler goals. Failure is Assembler-level Prefilter, not track routing.",
             consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
             ctx: "cabinets=4", candidates: [],
             hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
@@ -2765,11 +2809,11 @@ flowchart LR
   failed_leg: 2,
   code: "NO_CANDIDATES",
   stage: "prefilter",
-  checkpoints: [{ leg: 1, class: "Refrigerated", car: "R-17" }],
+  checkpoints: [{ leg: 1, stationType: "Refrigerated", station: "R-17" }],
   counts: { pool: 3, prefilter_pass: 0 },
   suggestions: ["Reopen Refrigerated checkpoint", "Relax min_seats / protocol"]
 }`,
-            notes: "Contrast Multi-Yard: there prefilter passed some Cars; accept failed on path Context.",
+            notes: "Contrast multi-switch: there Prefilter passed some Stations; inspect failed on path context.",
           },
         ],
       },
@@ -2781,11 +2825,11 @@ flowchart LR
         steps: [
           {
             phase: "assembler", leg: -1, meta: "Fresh resolve",
-            title: "Empty consist · Booking received",
+            title: "Empty route · Booking received",
             body: "Cold start.",
             consist: [], ctx: "(empty)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
-            notes: "No pre-bound Cars.",
+            notes: "No pre-bound Stations.",
           },
           {
             phase: "assembler", leg: 0, meta: "Leg R",
@@ -2811,12 +2855,12 @@ flowchart LR
             hops: ["1:Y1:1", "1:N-04:1"], hopsActive: 1,
             nodesOn: ["r17", "y1", "n04"],
             edgesOn: ["e_y1_n"], edgesDone: ["e_r_y1"],
-            notes: "Partial consist ready for Docking.",
+            notes: "Partial route ready for Docking.",
           },
           {
             phase: "coupler", leg: 2, meta: "Blocked",
             title: "N → D edges fully reserved",
-            body: "DockingInspector accepts D-02/D-11, but B-88 holds N→D capacity. No free path.",
+            body: "Docking inspect would accept D-02/D-11, but B-88 holds N→D capacity. No free path.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "R→N" },
@@ -2842,7 +2886,7 @@ flowchart LR
               { id: "N-04", cls: "b", locked: true },
               { id: "D-??", cls: "d", ghost: true },
             ],
-            ctx: "partial consist only", candidates: [],
+            ctx: "partial route only", candidates: [],
             hops: [], hopsActive: -1, nodesOn: ["n04"], edgesOn: [], edgesDone: [],
             edgesBlocked: ["e_n_d"],
             failure: `{
@@ -2850,8 +2894,8 @@ flowchart LR
   failed_leg: 3,
   code: "CAPACITY_BLOCKED",
   checkpoints: [
-    { leg: 1, class: "Refrigerated", car: "R-17" },
-    { leg: 2, class: "Normal", car: "N-04" }
+    { leg: 1, stationType: "Refrigerated", station: "R-17" },
+    { leg: 2, stationType: "Normal", station: "N-04" }
   ],
   blockers: [{ booking: "B-88", edge: "N→D" }],
   suggestions: ["Release B-88", "Wait for capacity"]
@@ -2868,7 +2912,7 @@ flowchart LR
         steps: [
           {
             phase: "assembler", leg: -1, meta: "Fresh resolve",
-            title: "Empty consist · first resolve",
+            title: "Empty route · first resolve",
             body: "No snapshot yet. Assembler runs cold.",
             consist: [], ctx: "(empty)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
@@ -2877,7 +2921,7 @@ flowchart LR
           {
             phase: "system", leg: 2, meta: "Cold SAT",
             title: "First resolve succeeds R—Y1—N—D",
-            body: "Full Assembler+Coupler run (summarized). Snapshot stores Cars + Yard hops + cables.",
+            body: "Full Assembler+Coupler run (summarized). Snapshot stores Stations + switch hops + Links.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→1" },
@@ -2919,7 +2963,7 @@ flowchart LR
           {
             phase: "system", leg: -1, meta: "No hopeful",
             title: "Re-resolve UNSAT · cache hit",
-            body: "No hopeful change → return cached failure, no car scan.",
+            body: "No hopeful change → return cached failure, no Station scan.",
             consist: [], ctx: "UNSAT cache hit", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
             notes: "Claims alone do not bust UNSAT cache.",
@@ -2966,15 +3010,15 @@ flowchart LR
     ];
 
     const TOPO_NODES = [
-      { id: "r17", label: "R-17", sub: "Refrigerated Car", kind: "car-a", x: 80, y: 100 },
-      { id: "r22", label: "R-22", sub: "Refrigerated Car", kind: "car-a", x: 80, y: 200 },
-      { id: "y1", label: "Y1", sub: "Yard hub", kind: "yard", x: 260, y: 150 },
-      { id: "y2", label: "Y2", sub: "Yard · stamp", kind: "yard", x: 260, y: 40 },
-      { id: "n04", label: "N-04", sub: "Normal Car", kind: "car-b", x: 460, y: 60 },
-      { id: "n08", label: "N-08", sub: "Normal Car", kind: "car-b", x: 460, y: 150 },
-      { id: "n12", label: "N-12", sub: "Normal Car", kind: "car-b", x: 460, y: 240 },
-      { id: "d02", label: "D-02", sub: "Docking Car", kind: "car-d", x: 660, y: 100 },
-      { id: "d11", label: "D-11", sub: "Docking Car", kind: "car-d", x: 660, y: 200 },
+      { id: "r17", label: "R-17", sub: "Refrigerated Station", kind: "car-a", x: 80, y: 100 },
+      { id: "r22", label: "R-22", sub: "Refrigerated Station", kind: "car-a", x: 80, y: 200 },
+      { id: "y1", label: "Y1", sub: "Switch (transparent)", kind: "yard", x: 260, y: 150 },
+      { id: "y2", label: "Y2", sub: "Switch · stamp", kind: "yard", x: 260, y: 40 },
+      { id: "n04", label: "N-04", sub: "Normal Station", kind: "car-b", x: 460, y: 60 },
+      { id: "n08", label: "N-08", sub: "Normal Station", kind: "car-b", x: 460, y: 150 },
+      { id: "n12", label: "N-12", sub: "Normal Station", kind: "car-b", x: 460, y: 240 },
+      { id: "d02", label: "D-02", sub: "Docking Station", kind: "car-d", x: 660, y: 100 },
+      { id: "d11", label: "D-11", sub: "Docking Station", kind: "car-d", x: 660, y: 200 },
     ];
 
     function edgeHighlightState(step, edgeMeta) {
@@ -3154,10 +3198,10 @@ flowchart LR
         const info = document.getElementById("topoNodeInfo");
         if (!info) return;
         const kind =
-          d.kind === "yard" ? "Yard (junction — not a Class candidate)" :
-          d.kind === "car-a" ? "Car · Class Refrigerated" :
-          d.kind === "car-b" ? "Car · Class Normal" :
-          d.kind === "car-d" ? "Car · Class Docking" : d.kind;
+          d.kind === "yard" ? "Switch Station (transparent — not a demand leg)" :
+          d.kind === "car-a" ? "Station · StationType Refrigerated" :
+          d.kind === "car-b" ? "Station · StationType Normal" :
+          d.kind === "car-d" ? "Station · StationType Docking" : d.kind;
         info.innerHTML =
           `<strong>${d.label}</strong> — ${kind}. ${d.sub || ""}. ` +
           `Edges: zoom/pan the graph; step a scenario to highlight paths.`;
@@ -3254,7 +3298,7 @@ flowchart LR
     }
 
     /**
-     * Clean orthogonal cables.
+     * Clean orthogonal Links.
      * - default: H→V→H at viaX (or midpoint)
      * - viaY: drop/rise to that Y, run horizontal, then into target
      * - loopback: exit source to the RIGHT, under, enter target IN from the LEFT
@@ -3266,7 +3310,7 @@ flowchart LR
       const viaY = opts.viaY;
 
       if (opts.loopback) {
-        // a = OUT port (right of source), b = IN port (left of target)
+        // a = OUT track (right of source), b = IN track (left of target)
         // Explicit U-turn: right → down → under → up → into IN from left
         const outRight = a.x + 56;
         const leftOfIn = Math.min(b.x - 32, 150);
@@ -3315,9 +3359,9 @@ flowchart LR
           <feMerge><feMergeNode in="bg"/><feMergeNode in="SourceGraphic"/></feMerge>
         </filter>
       </defs>`;
-      html += `<text x="480" y="16" text-anchor="middle" style="font-size:11px;fill:#5c6b82;font-family:system-ui,sans-serif">Port fabric — hop = in:Device:out · follow port numbers (no cable labels)</text>`;
+      html += `<text x="480" y="16" text-anchor="middle" style="font-size:11px;fill:#5c6b82;font-family:system-ui,sans-serif">Track fabric — hop = in:Station:out · follow track numbers (no Link labels)</text>`;
 
-      // draw cables FIRST (under nodes) so boxes sit on top of line ends
+      // draw Links FIRST (under nodes) so boxes sit on top of line ends
       for (const c of CABLES) {
         const [fd, ft] = c.from;
         const [td, tt] = c.to;
@@ -3327,14 +3371,14 @@ flowchart LR
         html += `<path id="edge-${c.id}" class="edge idle" d="${d}" fill="none"/>`;
       }
 
-      // cars
+      // demand stations
       for (const c of CAR_NODES) {
         html += `<rect id="node-${c.key}" class="node ${c.kind}" x="${c.x}" y="${c.y}" width="${c.w}" height="${c.h}" rx="8"/>`;
         html += `<text id="label-${c.key}" x="${c.x + c.w / 2}" y="${c.y + c.h / 2 - 2}" text-anchor="middle" style="font-size:12px;font-weight:700;fill:#e8eef7;font-family:ui-monospace,monospace">${c.label}</text>`;
         html += `<text x="${c.x + c.w / 2}" y="${c.y + c.h / 2 + 12}" text-anchor="middle" style="font-size:9px;fill:#8b9bb4">${c.sub}</text>`;
       }
 
-      // yards with ports
+      // transparent switches with tracks
       for (const name of Object.keys(YARD_SPECS)) {
         const s = YARD_SPECS[name];
         html += `<rect id="node-${s.id}" class="node yard" x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" rx="12"/>`;
@@ -3476,7 +3520,7 @@ flowchart LR
 
       Object.keys(cableFinal).forEach((id) => styleCable(id, cableFinal[id]));
 
-      // dim uninvolved cars/yards
+      // dim uninvolved stations
       const involved = new Set(step.nodesOn || []);
       hl.internalOn.forEach((x) => {
         const s = YARD_SPECS[normalizeDevice(x.device)];
@@ -3609,11 +3653,11 @@ flowchart LR
         legsRow.appendChild(el);
       });
 
-      // consist — Class Cars + Yards on the reserved path
+      // route bindings — demand Stations + transparent path stations
       const consist = document.getElementById("vizConsist");
       consist.innerHTML = "";
       if (!s.consist.length) {
-        consist.innerHTML = "<span style='color:var(--faint);font-size:0.85rem'>(empty — no Cars or Yards yet)</span>";
+        consist.innerHTML = "<span style='color:var(--faint);font-size:0.85rem'>(empty — no Stations bound yet)</span>";
       } else {
         s.consist.forEach((c, i) => {
           if (i) {
@@ -3642,27 +3686,27 @@ flowchart LR
           } else if (isYard && !c.ghost) {
             const hopSpan = document.createElement("span");
             hopSpan.className = "chip-hop";
-            hopSpan.textContent = "yard";
+            hopSpan.textContent = "path";
             chip.appendChild(hopSpan);
           } else if (!isYard && c.locked) {
             const hopSpan = document.createElement("span");
             hopSpan.className = "chip-hop";
-            hopSpan.textContent = "car";
+            hopSpan.textContent = "leg";
             chip.appendChild(hopSpan);
           }
           chip.title = isYard
-            ? (c.hop ? `Yard visit ${c.hop}` : "Yard on path")
-            : (c.ghost ? "Slot not bound yet" : "Claimed Class Car");
+            ? (c.hop ? `Transparent path visit ${c.hop}` : "Transparent station on path")
+            : (c.ghost ? "Slot not bound yet" : "Bound demand Station");
           consist.appendChild(chip);
         });
       }
 
-      // candidates — show Class + prefilter vs accept stage
+      // candidates — show StationType + Prefilter vs inspect stage
       const CLASS_OF = {
         "R-03": "Refrigerated", "R-17": "Refrigerated", "R-22": "Refrigerated",
         "N-04": "Normal", "N-08": "Normal", "N-12": "Normal",
         "D-02": "Docking", "D-11": "Docking",
-        "Y1": "Yard", "Y2": "Yard",
+        "Y1": "Switch", "Y2": "Switch",
       };
       const CAR_META = {
         "N-04": { seats: 8 },
@@ -3673,29 +3717,30 @@ flowchart LR
       const candHint = document.getElementById("candLegHint");
       cands.innerHTML = "";
       if (!s.candidates || !s.candidates.length) {
-        cands.innerHTML = "<span style='color:var(--faint);font-size:0.85rem'>(no Car checks this step)</span>";
+        cands.innerHTML = "<span style='color:var(--faint);font-size:0.85rem'>(no Station checks this step)</span>";
         candHint.textContent = "";
       } else {
         const stages = [...new Set(s.candidates.map((c) => c.stage || "prefilter"))];
         const classes = [...new Set(s.candidates.map((c) => CLASS_OF[c.id] || "?"))];
         candHint.innerHTML =
-          "<strong>Class " + classes.join(" / ") + " Cars.</strong> " +
+          "<strong>StationType " + classes.join(" / ") + " Stations.</strong> " +
           (stages.includes("prefilter") && !stages.includes("accept")
-            ? "<span style='color:var(--class-a)'>prefilter</span> only (Assembler, before A*) — path stamps / track routing not applied yet."
+            ? "<span style='color:var(--class-a)'>Prefilter</span> only (Assembler, before A*) — path stamps / track pair not applied yet."
             : stages.includes("accept")
-              ? "<span style='color:var(--yard)'>accept</span> = full Inspector at Coupler goal (path Context + track routing)."
-              : "Mix of prefilter / accept.");
+              ? "<span style='color:var(--yard)'>inspect</span> = Inspector.inspect at Coupler goal (tasking + path context + track pair)."
+              : "Mix of Prefilter / inspect.");
         s.candidates.forEach((c) => {
           const row = document.createElement("div");
           row.className = "cand " + c.st;
-          const cls = CLASS_OF[c.id] || "Car";
+          const cls = CLASS_OF[c.id] || "Station";
           const stage = c.stage || (c.st === "picked" ? "bind" : "prefilter");
+          const stageLabel = stage === "accept" ? "inspect" : stage === "prefilter" ? "prefilter" : stage;
           const meta = CAR_META[c.id];
           const seatNote = meta ? ` · ${meta.seats} seats` : "";
           row.innerHTML =
             `<span class="cid">${c.id}</span>` +
             `<span class="st ${c.st}">${c.st}</span>` +
-            `<span class="stage ${stage}">${stage}</span>` +
+            `<span class="stage ${stage}">${stageLabel}</span>` +
             `<span class="why"><strong>${cls}</strong>${seatNote} — ${c.why}</span>`;
           cands.appendChild(row);
         });
@@ -3721,7 +3766,7 @@ flowchart LR
           el.className = "hop" + (h === "…" || h.startsWith("✗") ? " dim" : "");
           if (active) el.style.boxShadow = "0 0 0 1px var(--accent)";
           if (past) el.style.opacity = "0.7";
-          // Show hop + decoded in→out for yards
+          // Show hop + decoded in→out for switches
           const ph = typeof parseHop === "function" ? parseHop(h) : null;
           if (ph && (ph.device.toUpperCase().startsWith("Y") || /^Y\d/i.test(ph.device))) {
             el.innerHTML = `${h}<br><span style="font-size:0.65rem;opacity:0.85">IN${ph.inn}→OUT${ph.out}</span>`;

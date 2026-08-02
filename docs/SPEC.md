@@ -53,13 +53,13 @@ Use these terms in code, APIs, and docs. Asset scheduling under the covers; **St
 | **Inspector** | Per-StationType: `(setup, tasking, request) → tasking \| fail` (same API all types) |
 | **Booking** | Demand legs + plan (bindings, route, failure, sticky) |
 | **Leg** | Non-transparent StationType + request |
-| **Route / Hop** | Full path after schedule: `in:station:out` (includes transparent stations) |
-| **Assembler** | Outer engine: legs, candidates, checkpoints, sticky, incremental resolve |
+| **Hop** | One visit: `in:station:out` (includes transparent stations) |
+| **Route** | Full hop path after resolve (user-visible plan; may revisit station with new hop_key) |
+| **Assembler** | Outer engine: legs, agenda, checkpoints, sticky, incremental resolve |
 | **Coupler** | Inner engine: path between leg endpoints on the station graph |
-| **Route** | Full hop path after resolve (user-visible plan) |
 | **Trackplan** | Project name (formerly Consist) |
 | **liveData** | Live metrics on a Station (not setup, not request); can block inspect |
-| **Prefilter** | Cheap screen: setup + request (+ optional context/liveData); no Task |
+| **Prefilter** | Cheap screen: setup + request + liveData; no Task |
 | **Binding** | Plan record: this Booking uses this Station (leg or path) |
 
 **Bridge:** ResourceType→StationType · Asset→Station · Class/Car→StationType/Station · Yard→transparent StationType · Cable→Link · Port→Track.
@@ -76,12 +76,13 @@ Re-entry: same station twice only with a different hop_key `(stationId,in,out)`.
 ```text
 ┌──────────────────────────────────────────────────────────┐
 │ ASSEMBLER                                                │
-│  for each Class leg:                                     │
-│    prefilter + rank Cars → goals                         │
-│    if first leg: bind Car (no Coupler)                   │
-│    else: result = Coupler.couple(tail → goals, context)  │
-│          // BLOCKED until Coupler returns once           │
-│    bind / append hops / update Context / checkpoint      │
+│  for each StationType leg (non-transparent):             │
+│    prefilter + agenda (edgeCost / NeighborRank)          │
+│    first leg: virtual S0 → Coupler (not Inspector-only)  │
+│    else: Coupler from previous Task.out → goals          │
+│    peel agenda: path + inspect; alts on failure          │
+│    checkpoint type only after *next* non-transparent OK  │
+│    commit tasking only on whole-Booking SAT              │
 │  sticky SAT or UNSAT FailureReport                       │
 └────────────────────────┬─────────────────────────────────┘
                          │ one call per Class→Class segment
@@ -516,16 +517,24 @@ Each item: decision needed, options, recommendation, impact if wrong.
 
 ### Q16. Booking priority and forced preemption (“force priority”)
 
-**Need (product):** Bookings can carry a **priority**. Normal resolve only uses **free** resources. If Coupler exhausts with CAPACITY_BLOCKED, the user may request **force priority**: use this Booking’s priority to **displace lower-priority Bookings** holding desired resources, then claim them.
+**Need (product):** Bookings can carry a **priority** (**1 = highest**).  
 
-**This needs more design before coding.** Below is a strawman, not DECIDED.
+**Already DECIDED in BUILD_SPEC (not full force-kick):**
+
+| Mechanism | In v1? |
+|-----------|--------|
+| Place queue: priority 1 first, then FCFS **submitTime** | **Yes** |
+| **Priority steal / plan re-place:** higher-priority booking **SAT-commits** at time event T and takes a station; lower-priority booking is **re-placed in the same engine run** for affected slices (multi planSegments) | **Yes** (§3.9b) — scheduling repair, logged as normal re-resolve |
+| **Force priority** API flag: treat lower-priority holders as preemptable even without a clean place-first pass; eviction cascade/audit | **OPEN** — strawman below; **do not implement** until designed |
+
+**This force-kick mode needs more design before coding.** Strawman only:
 
 #### Modes
 
 | Mode | Behavior |
 |------|----------|
-| **Normal** (default) | Only free Cars/hops/tracks. Exhaust → `CAPACITY_BLOCKED` (or busy). No kicks. |
-| **Force priority** | Explicit user/API flag on resolve. May treat resources held by **strictly lower** priority Bookings as preemptable; build a plan that includes **evictions** + new claims. |
+| **Normal + ordered place** (v1) | Priority queue + free capacity in time-sliced tasking views. Steal = re-place lower plan after higher commits. |
+| **Force priority** (OPEN) | Explicit user/API flag. May treat resources held by **strictly lower** priority as preemptable; build plan with **evictions** + new claims. |
 
 #### What “kick” means (options)
 

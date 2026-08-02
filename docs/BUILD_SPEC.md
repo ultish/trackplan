@@ -21,6 +21,16 @@
 
 When something is **OPEN**, the **DEFAULT** is still specified so build can proceed.
 
+### Document authority (DECIDED)
+
+| Source | Authority |
+|--------|-----------|
+| **§1–§4 + §3.7–§3.10** | **Canonical** — Station model, Prefilter/Inspector, first/last leg, sticky, commit |
+| **§5+** | Must not contradict §1–§4; if they do, **§1–§4 win** (legacy Class/Car/Yard wording is a rename of the same concepts) |
+| **SPEC.md** | Intent and open product questions; BUILD_SPEC §1–§4 wins on mechanism conflicts |
+
+**Vocabulary map (use when reading older sections):** StationType←Class · Station←Car · transparent StationType←Yard · Link←Cable · Track←Port · Tasking/Task←config/claims · Route/bindings←consist display.
+
 ---
 
 ## 1. Product thesis (non-negotiable)
@@ -77,6 +87,8 @@ Full design strawman (eviction, cascade, audit): **SPEC.md §12 Q16**.
 ## 3. Canonical data model
 
 ### 3.0 Mental model
+
+**Entity diagrams (Mermaid):** [ENTITY_DIAGRAMS.md](./ENTITY_DIAGRAMS.md).
 
 ```text
 StationType  = catalog type (schemas, inspector, heuristics, transparent?)
@@ -700,11 +712,14 @@ Context = Record<string, JsonValue>   // on each Task
 
 **DECIDED:** **Inspector** is the writer of durable path communication:
 
-1. Coupler appends a **candidate Task** (in/out known from topology; may seed empty/partial context).  
+1. Coupler appends a **candidate Task** (in/out known from topology; context seeded from **previous Task.context** on the path, or `{}` at start).  
 2. Inspector runs on full `Task[]` (existing + candidate).  
-3. On accept, inspector places request material into **taskingConfiguration** and puts **downstream facts into Task.context** so later stations can read them (station-to-station communication along the route).  
+3. On accept, inspector places request material into **taskingConfiguration** and puts **downstream facts into Task.context** so later stations can read them.  
 
-Assembler/Coupler pass the accepted tasking forward into the next segment.
+**Canonical “current context” for the booking path (DECIDED):**  
+There is **no separate booking-global Context store**.  
+`currentContext` in Assembler/Coupler pseudocode means **a copy of the latest accepted Task.context on the working path** (or `{}` before any Task).  
+`ResolveResult.context` (if exposed) = that same value at finish (last Task on route), not a second shadow map.
 
 ### 4.3 Discovering path context (why try endpoint B before transparent SW?)
 
@@ -723,118 +738,83 @@ Inspectors **must not** hard-code fabric stations (“go to SW-2”). They accep
 
 ---
 
-## 5. Inspector contract
+## 5. Prefilter + Inspector contract (**canonical = §3.7**)
 
-> **Note:** §3.7 is the **canonical** inspect API (`setup`, `tasking`, `request` → `Task[] | fail`).  
-> Older “prefilter / accept” split below is **under revision** to align with Task-centric context. DEFAULT: path-blind cheap screen must not reject stations that could succeed after path Tasks build context.
-
-### 5.1 Interface (legacy two-stage — align with §3.7)
-
-**DEFAULT v1 during transition:** two stages — cheap Assembler screen vs full check when a goal Task is proposed.
+**DECIDED:** One registration model, two plugins per StationType (or one jar exposing both):
 
 ```text
-Inspector {
-  stationTypeId: string
+// StationType.prefilterId →
+Prefilter.canUse(setup, request, liveData) → ok | reject(code, message)
+// No Task, no path context. Must not reject path-only successes.
 
-  // --- Assembler (before Coupler) ---
-  // Cheap, path-independent (or uses only Context already known).
-  // MUST NOT reject a Station that could succeed after path-acquired Task.context.
-  // Safe rejects: wrong Class, offline, can never do Setup, hard config mismatch,
-  //                missing facts that only come from *earlier binds* (already in Context),
-  //                not "missing stamp that a Yard might still publish on the way".
-  prefilter(request, car, context)
-    → { ok: true }
-    | { ok: false, code: string, message: string }
+// StationType.inspectorId →
+Inspector.inspect(setup, tasking, request, liveData) → Task[] | Failure
+// tasking includes exactly one Coupler-appended candidate Task.
+// Returns FULL Task[] for that station (working copy). Context lives on Tasks.
 
-  // Optional ranking among cars that passed prefilter
-  rank_cost(request, car, context) → number   // DEFAULT: 0 if setup already matches, else 100
-
-  // --- Coupler (on arrival at Car port, with path Context) ---
-  // Real inspection: request + car live config + Context including path stamps.
-  accept(request, car, context)
-    → { ok: true }
-    | { ok: false, code: string, message: string }
-
-  publish_facts(request, car, context) → FactPatch[]   // after successful bind
-
-  // Optional: keys still missing that path hops might supply (docs/ Coupler state)
-  required_path_facts(request, context) → string[]
-}
+// Optional ranking for Assembler goal list / Coupler ties (§3.7b):
+// Use NeighborRank / edgeCost plugins — NOT a separate rank_cost API.
+// DEFAULT: neighborRank = 0; sort by edgeCost then track name.
 ```
 
-| Stage | When | Context available | Use |
-|-------|------|-------------------|-----|
-| **prefilter** | Assembler, before `couple()` | Prior legs only (no path stamps yet) | Drop cars that **cannot** work; shrink multi-sink goals |
-| **accept** | Coupler, at goal port | Prior + **path-acquired** facts | Real gate to bind |
+| Stage | When | Inputs | Use |
+|-------|------|--------|-----|
+| **Prefilter** | Assembler before agenda/Coupler | setup, request, liveData | Shrink candidate stations |
+| **inspect** | Coupler when peeled target | setup, tasking(+candidate), request, liveData | Accept/reject + new tasking |
 
-**Wrong:** call full `accept` at Assembler and drop N-12 because stamp missing — stamp might arrive via Y2.  
-**Right:** `prefilter` only uses irreversible/static checks; stamp checked in `accept` at goal (or prefilter if stamp already in Context from an *earlier* leg).
+**Wrong:** full inspect at Assembler dropping stations for missing path stamps.  
+**Right:** prefilter only irreversible/static checks; path facts checked in **inspect** when candidate Task carries context.
 
-#### Example: Class Normal — seats vs track routing
+#### Example: StationType Normal — seats vs path
 
-**Leg request:** Class Normal, must support **more than 5 seats**.  
-Full inspection also cares whether the Car can actually **run the arrival path** (e.g. enter on track 1, leave toward next segment on track 2).
+**Leg request:** `min_seats: 6`. Inspect also checks arrival routing + path context stamps.
 
 ```text
-// Assembler — cheap, no fabric
-prefilter(request={ min_seats: 6 }, car, context):
-  if car.offline: return reject("OFFLINE")
-  if car.max_seats < request.min_seats:   // e.g. N-08 has only 4 seats
-    return reject("SEATS")                 // safe: no path will add seats
-  if car cannot ever arm Setup for this request:
-    return reject("SETUP")
-  return ok   // keep as Coupler goal even if path stamps / track routing unknown
-
-// Coupler — on arrival at this Car with concrete path
-accept(request, car, context, arrival):  // arrival = in_track used, planned out, path hops
-  // still enforce seats (belt and suspenders)
-  if car.max_seats < request.min_seats: return reject("SEATS")
-  // thorough: can this Car internal routing support the path we took / need next?
-  if not car.can_route(in_track=arrival.in, out_track=arrival.desired_out):
-    return reject("TRACK_ROUTE")           // e.g. cannot run track 1 → track 2
-  if missing path Context keys (stamps): return reject("CONTEXT")
-  // … other deep checks (band, firmware mode, isolation, …)
+Prefilter.canUse(setup, request={ min_seats: 6 }, liveData):
+  if station CLOSED/offline: reject OFFLINE
+  if setup.max_seats < 6: reject SEATS   // safe: path won't add seats
   return ok
+
+Inspector.inspect(setup, tasking, request, liveData):
+  // tasking includes candidate Task with input/output/context
+  if setup.max_seats < request.min_seats: fail SEATS
+  if not legalPairs(candidate.input → candidate.output): fail TRACK_ROUTE
+  if candidate.context missing required stamp: fail CONTEXT
+  return new full Task[]  // or fail CAPACITY / multiplex / …
 ```
 
-| Car | max_seats | prefilter | Later in Coupler |
-|-----|-----------|-----------|------------------|
-| N-04 | 8 | **pass** → A* goal | `accept`: check 1→2 routing, stamps, … |
-| N-08 | 4 | **fail SEATS** — never a goal | never searched |
-| N-12 | 12 | **pass** → A* goal | may fail `TRACK_ROUTE` if path enters a track it can’t bridge |
-
-Assembler never asks “can I run track 1→2?” — that depends on **which cable/hop** Coupler used to arrive. Prefilter only asks “is this Car even capable of >5 seats?”
+| Station | max_seats | prefilter | inspect |
+|---------|-----------|-----------|---------|
+| N-04 | 8 | pass → agenda | may need stamp via SW path |
+| N-08 | 4 | fail SEATS | never searched |
+| N-12 | 12 | pass → agenda | may fail TRACK_ROUTE |
 
 ### 5.2 Assembler usage
 
 ```text
-for car in pool(class_id) if online and not checkpoint-closed:
-  r = inspector.prefilter(leg.request, car, context)   // cheap mini-inspector
-  if r.ok: candidates.append(car)
-// candidates become Coupler multi-sink goals
-// full accept() runs inside Coupler when a path reaches the car
+for station in pool(stationTypeId) if OPEN and not checkpoint-closed:
+  if Prefilter.canUse(station.setup, leg.request, station.liveData).ok:
+    candidates.append(station)
+// candidates → Oracle filter → agenda → Coupler.couple / inspect when peeled
 ```
 
-If `required_path_facts` are missing from Assembler Context, **still keep** the car as a goal if `prefilter` passed — Coupler may acquire facts en route.
+### 5.3 Per-StationType guide
 
-### 5.3 Per-Class guide (how to add a Class)
+1. setupSchema / taskingSchema / requestSchema  
+2. Prefilter reject codes  
+3. inspect rules + Failure codes  
+4. What goes into Task.context for downstream  
+5. heuristics.checkpoint / fillFirst / transparentCost  
+6. Unit tests  
 
-Document for each Class (template):
+**v1 toy StationTypes (goldens / walkthroughs):**
 
-1. `request` JSON schema  
-2. `accept` rules (table of reject codes)  
-3. `publish_facts` keys  
-4. `required_path_facts` if any  
-5. Checkpoint default  
-6. Unit tests: accept/reject fixtures  
-
-**v1 toy classes for golden tests** (implement these three):
-
-| Class | request | accept highlights | publish | path facts |
-|-------|---------|-------------------|---------|------------|
-| Refrigerated | `{ setup: "4N", band?: string }` | prefilter: can do 4N/band; accept: same | `refrigerated.cabinets=4` | none |
-| Normal | `{ setup: "2-seats" }` | prefilter: can do 2-seats + prior `cabinets` if required; **not** path stamps; accept: + any path facts | `normal.seats=2` | optional stamp in multi-yard toy |
-| Docking | `{ setup: "1-connector" }` | prefilter: can dock; accept: `clearance.y2_stamp` if required by topology | `docking.connector=1` | `clearance.y2_stamp` |
+| StationType | transparent | request highlights | prefilter | inspect path facts |
+|-------------|-------------|-------------------|-----------|-------------------|
+| Refrigerated | no | setup/band style fields | static capability | bind; publish e.g. cabinets into Task.context |
+| Normal | no | min_seats, … | seats etc. | track route + **clearance.y2_stamp** (or equiv.) in Task.context |
+| Switch (Y1/Y2) | **yes** | usually null | n/a mid-path | tasking in/out; Y2 may write stamp into Task.context |
+| Docking / Terminal | no | connector, … | static | often terminal (out null); **not** the Y2 stamp gate |
 
 ---
 
@@ -895,113 +875,104 @@ Policy {
 | Agg/exp shared vs exclusive | **Exclusive** | Combine later |
 | Backtrack on checkpoint fail | **0** (fail; report checkpoint) | Set `backtrack_depth: 1` later to reopen last checkpoint |
 | First-fit vs price all goals | **First-fit multi-sink** (stop at first goal in rank order) | Beam later |
-| Leg 1 entry | **Virtual source** connected to all free in-ports of candidate Cars of leg 0 **or** bind first Car with empty route if no prior tail | DECIDED: if no tail, pick ranked Car via Inspector only; route starts empty; first Coupler is leg 0→1 |
-| UNSAT invalidation | **Hopeful token set** (not full global fingerprint for claims) | See §10 |
-| Path Context model | **Coupler state includes Context**; yard `publish_on_hop` patches on expand | Waypoints optional optimization |
-| Which Yards publish | **Instance `publish_on_hop` list**; empty by default | Toy Y2 publishes stamp |
+| Leg 1 entry | **Virtual S0 → Coupler** into prefiltered first StationType (inputs unused) | **§3.7** — not Inspector-only bind |
+| UNSAT invalidation | Relevance-scoped hope (§3.10) | Not global token nuke |
+| Path Context | **Per Task.context**; flowing var = last accepted Task.context | §4.2 |
+| Transparent facts | Inspector writes Task.context (e.g. stamp) | No Yard entity |
 
 ---
 
-## 8. Algorithms (implement exactly)
+## 8. Algorithms (implement exactly — Station model; **§3.7 wins** if conflict)
 
-### 8.0 Assembler ↔ Coupler contract (read this first)
+### 8.0 Assembler ↔ Coupler contract
 
 | | **Assembler** | **Coupler (A\*/BFS)** |
 |--|---------------|------------------------|
-| **Job** | Run the Booking: ordered Class legs, grow consist, Context, checkpoints, sticky/fail | Find **one successful fabric path** from current tail to **some** next-Class candidate Car |
-| **Calls** | Once per Class→Class **segment** (after first Car is bound) | Internal expansions only — **not** one return per failed path try |
-| **Success** | Bind returned Car, append **full** hop list, update Context | Early return: `{ car, hops[], context }` when goal port + Inspector OK |
-| **Failure** | Booking UNSAT at this leg | Exhaust open set / budget → fail code (no path acceptable) |
-| **Yards** | Does not navigate Yards | Yards are middle nodes on the port graph (0..many types/hops between two Classes) |
-| **Does not** | Expand every track | Decide leg order, checkpoints, sticky snapshot |
+| **Job** | Legs, prefilter, agenda/alts, checkpoints, sticky, whole-booking commit | Path from tail or **virtual S0** to peeled target; inspect when peeled |
+| **Calls** | One segment **per leg including first** (S0 for first StationType) | Internal expansions; try/fail paths stay inside segment |
+| **Success** | Working overlay + route; commit only on full Booking SAT | Path + inspect-OK Task[] on goal |
+| **Failure** | UNSAT; discard overlay | Exhaust agenda / budget |
+| **Transparent** | Not demand legs | Middle of Link graph |
+| **Does not** | Expand every track | Own multi-booking queue / sticky |
 
 ```text
-// Control flow (not per-path Assembler round trips)
-for leg in legs:
-  if first leg: bind Car via Inspector only
-  else:
-    result = Coupler.couple(tail → candidate Cars of this Class)
-    // Coupler may try short path, fail Inspector, try other paths, visit Y2, …
-    // Assembler is blocked until Coupler returns ONCE
-    if result.fail: return UNSAT
-    bind result.car; route += result.hops; context = result.context; tail = result.car
+working = empty overlay on CommittedWorld
+tail = null   // first leg uses virtual S0
+for leg in booking.legs:  // non-transparent StationTypes only
+  candidates = Prefilter pool
+  agenda = sort(oracleFilter(finishes toward candidates))  // first: S0→candidates
+  peel agenda until Coupler path + inspect OK or fail
+  if fail: discard working; return UNSAT
+  // checkpoint *previous* type only after this leg succeeded (§3.9d)
+if all legs OK: commit working; return SAT
 ```
 
-**Wrong mental model:** Coupler returns `R→Y1→N4` to Assembler, Inspector fails, Assembler starts a **new** A\* for `R→Y2→N4`.  
-**Right mental model:** That entire try/fail/continue sequence is **inside one** `couple()` call.
+**Wrong:** first leg = Inspector-only bind with **no** Coupler.  
+**Right:** first leg = **S0 + Coupler** (§3.7).  
+**Wrong:** Assembler starts a new A* after each short-path inspect fail.  
+**Right:** fails stay inside segment / agenda peel.
 
-**Long Yard chains:** Booking legs `ClassA → ClassZ` with only Yards between ⇒ still **one** Coupler call; path may be `A → Y₁ → … → Y₁₂ → Z`. Twelve yard *types* are edge rules, not twelve Assembler steps.
-
-### 8.1 Resolve (Assembler)
+### 8.1 Resolve (Assembler) — sketch
 
 ```text
-function resolve(booking_id, opts={force:false}):
-  booking = load(booking_id)
-  policy = load_policy()
+function placeBooking(booking, world, opts={force:false}):
+  if !opts.force and stickySAT.hit(booking, world): return cached SAT
+  if !opts.force and stickyUNSAT.hit(booking, world): return cached UNSAT
 
-  if !opts.force and booking.snapshot and snapshot_valid(booking.snapshot):
-    return SAT from snapshot
+  working = WorkingState(world)
+  route = []; bindings = []; tail = null; closedTypes = {}
 
-  if !opts.force and booking.failure and unsat_still_valid(booking.failure):
-    return UNSAT from cache
+  for legIndex, leg in enumerate(booking.legs):
+    prefilter = registry.prefilter(leg.stationTypeId)
+    inspector = registry.inspector(leg.stationTypeId)
+    pool = OPEN stations of type not in closedTypes
+    candidates = [s for s in pool if prefilter.canUse(s.setup, leg.request, s.liveData).ok]
+    if candidates empty: return fail(NO_CANDIDATES, legIndex)
 
-  context = {}
-  route = []
-  consist = []
-  closed_classes = {}
-  tail = null  // Port | null
+    agenda = buildAgenda(tail, candidates, nextLegGoals, oracle)  // sort: edgeCost, rank, track
+    // first leg: tail=null ⇒ virtual S0; first type inputs unused
 
-  for leg in booking.legs:
-    inspector = registry(leg.class_id)
-    pool = cars where class_id and online and (class not in closed_classes)
-    candidates = []
-    for car in pool:
-      // If required path facts missing, still allow as geometric goals only if
-      // Coupler can acquire facts en route; accept() rechecked at goal with path context.
-      candidates.append(car)
+    segmentOk = false
+    while agenda not empty:
+      target = agenda.pop()
+      path = Coupler.tryTarget(tail, target, working, inspector, leg.request)
+      if path is null: continue
+      apply path to working; route += path; bindings += …
+      tail = out track of accepted Task on goal (null if terminal last leg)
+      segmentOk = true
+      // remaining agenda kept for backtrack if later leg fails
+      break
+    if not segmentOk:
+      // backtrack prior alts or:
+      discard working; return fail(..., legIndex)
+    if legIndex > 0: closedTypes.add(booking.legs[legIndex-1].stationTypeId)
 
-    // Soft filter: cars that can never accept even with all path facts → drop
-    candidates = [c for c in candidates if maybe_accept(inspector, leg, c, context)]
-
-    candidates.sort by (
-      sticky car first if matches last snapshot,
-      inspector.rank_cost,
-      car.id ascending
-    )
-
-    if candidates empty after pure Inspector with current context
-       and required_path_facts already satisfied or none:
-      return fail(NO_CANDIDATES | CONTEXT_DEAD_END, leg, consist, context)
-
-    if tail is null:
-      // first leg: bind without fabric (DEFAULT)
-      car = first candidate that inspector.accept(leg.request, car, context).ok
-      if none: return fail(NO_CANDIDATES, …)
-      bind(car); publish facts; checkpoint; consist.append; tail = choose_tail_port(car)
-      continue
-
-    path, car, context_after = Coupler.couple(
-      tail, candidates, context, inspector, leg, policy.coupler
-    )
-    if path is null:
-      return fail(code from coupler, leg, consist, context)
-
-    // reserve hops+car in txn
-    route.append_all(path)
-    consist.append(car)
-    context = context_after
-    merge inspector.publish_facts(...)
-    if class.checkpoint: closed_classes.add(class_id)
-    tail = choose_tail_port(car)
-
-  commit reservations
-  snapshot = { legs_hash, consist, route, context, world_token }
+  commit working → world
+  stickySAT.save(...)
   return SAT
 ```
 
-`maybe_accept`: **DEFAULT** — run `accept` with context; if fail only due to missing keys in `required_path_facts`, keep candidate; if fail for other reasons, drop.
+### 8.1b Legacy pseudocode removed
 
-### 8.2 Coupler (multi-sink, context-aware)
+> The old loop “if tail is null: bind via Inspector only; else couple” is **void**. Use §8.1 above.
+
+```text
+// REMOVED (do not implement):
+//   if tail is null: car = first candidate inspector.accept(...); bind without Coupler
+// Use virtual S0 + couple/agenda for first leg instead.
+```
+
+### 8.1c Sort keys (no separate rank_cost API)
+
+```text
+// Agenda / neighbor sort — §3.7b only:
+edgeCost ascending
+then neighborRank descending if type defines SmartNode and edgeCost equal
+then track name
+// sticky preferred station may be forced first as policy override when sticky_prefer
+```
+
+### 8.2 Coupler (multi-sink; implement with §3.7 / §3.7b)
 
 ```text
 state = {
@@ -1087,28 +1058,34 @@ function couple(tail_port, candidate_cars, context0, inspector, leg, caps):
   status: "sat" | "unsat",
   sticky_hit?: boolean,
   negative_cache_hit?: boolean,
-  consist?: ConsistSlot[],
+  bindings?: Binding[],
   route?: Hop[],
+  planSegments?: PlanSegment[],
+  // Optional convenience: last Task.context on route (NOT a separate global store — see §4.2)
   context?: Context,
   failure?: FailureReport,
   metrics?: { expansions, ms, candidates_per_leg: number[] }
 }
 ```
 
-### 9.3 FailureReport
+### 9.3 FailureReport (**align with §3.10**)
 
 ```text
 {
-  failed_leg: int,
-  code: "NO_CANDIDATES" | "INSPECTOR_REJECT" | "ALL_BUSY" | "UNREACHABLE"
-       | "CAPACITY_BLOCKED" | "BUDGET" | "CONTEXT_DEAD_END" | "POLICY",
-  summary: string,
-  checkpoints: { leg, class_id, car_id }[],
-  counts: object,
-  blockers: { booking_id?, hop?, yard_id?, detail? }[],
-  suggestions: string[],
-  hopeful_token: string,     // for negative cache
-  inspector_samples?: { car_id, code, message }[]
+  // Canonical codes (aliases in parentheses for older prose):
+  code: "NO_CANDIDATES" | "INSPECT_FAIL" /* aka INSPECTOR_REJECT */
+      | "UNREACHABLE" | "BUDGET" | "CAPACITY" /* aka CAPACITY_BLOCKED */
+      | "ALL_BUSY" | "CONTEXT_DEAD_END" | "POLICY" | string,
+  legIndex: int | null,          // preferred name (failed_leg synonym)
+  message: string,               // summary synonym
+  stationId: string | null,
+  pathTaken: Hop[] | null,
+  // Optional richer fields (DEFAULT empty):
+  checkpoints?: { leg, stationTypeId, stationId }[],
+  counts?: object,
+  blockers?: { bookingId?, hop?, stationId?, detail? }[],
+  suggestions?: string[],
+  inspector_samples?: { stationId, code, message }[]
 }
 ```
 
@@ -1166,7 +1143,7 @@ Cached UNSAT reusable while `hopeful_rev` and `legs_hash` and `policy_rev` (if t
 2. Order of locking: sort resource ids; claim cars then hops to avoid deadlock.  
 3. If conflict mid-resolve → abort, return retryable error or `CAPACITY_BLOCKED`.  
 4. Two concurrent resolves: serializable isolation; one wins claims.  
-5. No preemption in v1.
+5. **No force-kick preemption in v1** (SPEC Q16). **Allowed:** priority-ordered place + same-run **plan re-place** of lower-priority bookings when a higher-priority booking **SAT-commits** and takes a resource at a time event (§3.9b “priority steal”).
 
 ---
 
@@ -1194,7 +1171,7 @@ Implement as automated tests (toy topology fixture).
 | G2 | No oscillation | With Y1↔Y2 cables present, search cannot spin forever: `forbid_repeat_hop_key` + `max_visits_per_yard` / `max_hops` / expansions → finite `BUDGET` or UNSAT (never hang) |
 | G3 | Inspector context | cabinets=4 filters Normal; wrong cars rejected |
 | G4 | Checkpoint | After R bind, other R cars never tried |
-| G5 | Context yard loop | Short Y1→D fails Inspector; path via Y2 stamp then D succeeds |
+| G5 | Context path stamp | Short path to N-04 fails inspect (missing stamp in Task.context); path via Y2 writes stamp then N-04 succeeds |
 | G6 | Capacity blocked | Reserve blocking hop; CAPACITY_BLOCKED + blocker id |
 | G7 | Sticky SAT | resolve×2 identical route/consist; second sticky_hit |
 | G8 | Negative UNSAT | fail; resolve again no hopeful change → negative_cache_hit, expansions=0 |
@@ -1206,9 +1183,11 @@ Implement as automated tests (toy topology fixture).
 ### Toy topology (minimal)
 
 - Cars: R-17, R-22, N-04, N-08, N-12, D-02, D-11  
-- Yards: Y1 restricted (`1→1`, `1→2`, `1→3`, `5→6` legal; **not** `1→6`), Y2 (`1→5`, `1→6`; `publish_on_hop: clearance.y2_stamp`)  
-- Cables (no out multiplex): Y1:1→N-04, Y1:2→Y2:1, Y1:3→N-08, Y1:6→N-12, Y2:5→N-04, Y2:6→Y1:5, N-04→D-02, N-12→D-11  
-- G5 / loopback: short Y1→N fails stamp; if Y2→N-04 free → bind N-04; if closed → loopback re-entry → N-12  
+- Stations: Y1/Y2 = **transparent** Switch StationTypes; N-*/R-*/D-* = non-transparent  
+- Y1 restricted legalPairs (`1→1`, `1→2`, `1→3`, `5→6`; **not** `1→6`); Y2 (`1→5`, `1→6`); Y2 inspect may write `clearance.y2_stamp` into Task.context  
+- Links: Y1:1→N-04, Y1:2→Y2:1, Y1:3→N-08, Y1:6→N-12, Y2:5→N-04, Y2:6→Y1:5, N-04→D-02, N-12→D-11  
+- **G5:** stamp gate is on **Normal (N-04)**, not Docking — short Y1→N-04 fails inspect; via Y2 stamp then N-04 OK  
+- loopback: if Y2→N-04 closed → re-entry → N-12  
 - See walkthroughs `?scenario=multiyard` and `?scenario=loopback`  
 
 ---

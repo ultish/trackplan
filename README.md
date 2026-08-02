@@ -7,7 +7,7 @@ Users request ordered **StationType** legs with **requests**; Trackplan binds **
 | Layer | Role |
 |-------|------|
 | **Assembler** | Legs, prefilter, time slices, agenda/alts, commit, sticky |
-| **Coupler** | Path search on Links (A*), inspect candidates, dynamic edge costs |
+| **Coupler** | Multi-sink path search on Links; ExpandKey frontier; inspect at goals |
 
 ## Docs
 
@@ -19,7 +19,7 @@ Start: **[docs/README.md](./docs/README.md)**
 | [docs/BUILD_SPEC.md](./docs/BUILD_SPEC.md) | **Canonical** entities + engine decisions (Station model) |
 | [docs/booking-assembler-design.html](./docs/booking-assembler-design.html) | Interactive walkthroughs (vocabulary pass later) |
 | [docs/FIXTURE_STUDIO.md](./docs/FIXTURE_STUDIO.md) | Fixture Studio design (React Flow, JSON → Kotlin goldens) |
-| [docs/COUPLER_OPTION_A_VS_B.md](./docs/COUPLER_OPTION_A_VS_B.md) | Multi-sink vs peel debate (v1 = multi-sink A) |
+| [docs/COUPLER_OPTION_A_VS_B.md](./docs/COUPLER_OPTION_A_VS_B.md) | Multi-sink ExpandKey frontier vs peel (v1 = A) |
 
 ```bash
 open docs/BUILD_SPEC.md

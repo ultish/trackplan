@@ -5,10 +5,11 @@ Toy Coupler simulator for Trackplan walkthrough accuracy.
 ExpandKey (lexicographic, DECIDED BUILD_SPEC §3.7b):
   0 preferInUse (higher) — neighbor has tasking
   1 preferNonTransparent (higher)
-  2 distToTerminal (lower) — Oracle++ hop length to nearest terminal
-  3 neighborRank (higher) — default 0
-  4 stationName (lower)
-  5 portName / out track (lower)
+  2 distToSegmentGoals (lower) — Oracle++ hops to nearest multi-sink goal in G
+  3 distToTerminal (lower) — Oracle++ hop length to nearest terminal
+  4 neighborRank (higher) — default 0
+  5 stationName (lower)
+  6 portName / out track (lower)
 
 Usage:
   python3 coupler_toy_sim.py simple
@@ -119,18 +120,47 @@ def dist_to_terminal(station: str, offline_links: set[tuple[str, str, str, str]]
     return 10**9
 
 
-def expand_key(to_station: str, out_or_in_port: str, offline_links=None) -> tuple:
+def dist_to_goals(station: str, goals: set[str], offline_links=None) -> int:
+    """Min hop distance to any station in multi-sink set G. 0 if station ∈ G."""
+    if station in goals:
+        return 0
+    offline = offline_links or set()
+    q = [(station, 0)]
+    seen = {station}
+    i = 0
+    while i < len(q):
+        cur, d = q[i]
+        i += 1
+        for a, at, b, bt in LINKS:
+            if (a, at, b, bt) in offline:
+                continue
+            if a == cur and b not in seen:
+                if b in goals:
+                    return d + 1
+                seen.add(b)
+                q.append((b, d + 1))
+    return 10**9
+
+
+def expand_key(
+    to_station: str,
+    out_or_in_port: str,
+    offline_links=None,
+    goals: set[str] | None = None,
+) -> tuple:
     meta = STATIONS[to_station]
     in_use = 1 if meta.get("tasking") else 0
     non_trans = 0 if to_station in TRANSPARENT else 1
-    dist = dist_to_terminal(to_station, offline_links)
+    gset = goals or set()
+    dist_seg = dist_to_goals(to_station, gset, offline_links) if gset else 0
+    dist_term = dist_to_terminal(to_station, offline_links)
     rank = 0
-    # prefer higher in_use, non_trans, rank; lower dist, name, port
-    # sort key for Python: use negatives for higher-prefer
+    # prefer higher in_use, non_trans, rank; lower distances, name, port
     return (
         -in_use,
         -non_trans,
-        dist,
+        dist_seg,
+        dist_term,
         -rank,
         to_station,
         str(out_or_in_port),
@@ -246,7 +276,7 @@ def couple(
         states[sid] = st
         # ExpandKey for open-set among same g (lexicographic, not summed f)
         port = port_hint if port_hint is not None else (st.in_track or "1")
-        ek = expand_key(st.station, port, offline)
+        ek = expand_key(st.station, port, offline, goals)
         heapq.heappush(open_heap, PQItem(st.g, ek, _seq, sid))
 
     # Seed
@@ -254,9 +284,9 @@ def couple(
         # S0 → each goal station (or candidates)
         seeds = sorted(goals)
         log.append(f"S0 expand order (ExpandKey):")
-        ranked = sorted(seeds, key=lambda s: expand_key(s, "1", offline))
+        ranked = sorted(seeds, key=lambda s: expand_key(s, "1", offline, goals))
         for s in ranked:
-            log.append(f"  S0 → {s}  key={expand_key(s, '1', offline)}")
+            log.append(f"  S0 → {s}  key={expand_key(s, '1', offline, goals)}")
             st = State(s, None, frozenset(), 0, (), None, f"S0→{s}")
             # inspect at goal immediately as start
             push_state(st)
@@ -337,7 +367,7 @@ def couple(
                 cands.append((b, bt, hop, out, link))
 
         # Sort by ExpandKey of destination (lexicographic — NOT sum)
-        cands.sort(key=lambda c: expand_key(c[0], c[3], offline))
+        cands.sort(key=lambda c: expand_key(c[0], c[3], offline, goals))
 
         if cands:
             log.append(f"[{expansions}] EXPAND {st.station} in={st.in_track} ctx={sorted(st.context)} children (ExpandKey order):")
@@ -348,7 +378,7 @@ def couple(
                     else ("transparent" if b in TRANSPARENT else "not-goal")
                 )
                 log.append(
-                    f"    → {hop} Link→ {b}:{bt}  [{tag}]  key={expand_key(b, out, offline)}"
+                    f"    → {hop} Link→ {b}:{bt}  [{tag}]  key={expand_key(b, out, offline, goals)}"
                 )
 
         for b, bt, hop, out, link in cands:

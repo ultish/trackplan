@@ -152,6 +152,9 @@ StationType {
 
   heuristics: {
     checkpoint: bool               // after bind this type, do not try other stations of type
+    fillFirst: bool                // default true — ExpandKey preferInUse (§3.7b)
+    neighborRankId: string | null  // optional SmartNode — ExpandKey component 4
+    // no edgeCostId / transparentCost / summed preference ladder
   }
 }
 ```
@@ -273,16 +276,16 @@ Inspector.inspect(
 - **Request (B):** copied into candidate `taskingConfiguration` **and** passed as `inspect` arg.  
 - `request == null` on prefilter: generally **no pre-filtering** (type may still hard-reject).
 
-#### First leg / entry into A* (DECIDED)
+#### First leg / entry into Coupler (DECIDED)
 
 Demand leg 1 = StationType T. **No transparent types before T.** First type is **entry-special**: Coupler **does not use input tracks** on these stations (even if the type defines some).
 
 1. Assembler: OPEN stations of type T → **Prefilter**(setup, request, liveData) → candidate set C.  
 2. Coupler: **virtual source S0** (not a real Station) with edges **S0 → each c ∈ C** (“pick this start station”).  
    - No Link into an in-track required.  
-   - Cost S0→c uses edgeCost/neighborRank (fill-first, etc.) on c’s tasking.  
+   - Order S0→c by **ExpandKey** (§3.7b; fill-first / distToG / names on candidates).  
 3. Goal: **inspect** accepts a **start Task** on some c (out-track chosen for the *next* segment if any).  
-4. **`h`:** for this segment goals are the candidates themselves → `h(c)=0` at a goal; `h(S0)=0` (or min over candidates — equivalent for ranking). Later segments: `h(n)` = Oracle++ hop-count to nearest prefiltered goal of that leg’s type.
+4. Ranking: **ExpandKey** on S0→candidates and on fabric expands (§3.7b). Frontier pop is ExpandKey-dominated (not a separate `f=g+h` preference).
 
 #### Last leg / terminal (DECIDED)
 
@@ -315,9 +318,10 @@ Booking demand legs = ordered **non-transparent** StationTypes `T0, T1, …, Tk`
 | **Non-transparent chain** | From a Station (or finish) of type **T_i**, can I reach **some** Station of type **T_j** (j > i), via fabric + transparent only? | Drop sinks that are dead for **later demand legs** |
 | **To terminal** | From a Station/port, can I reach **some** Station of terminal type **Tk**? | Filter dead-end sinks |
 | **Distance to terminal** | Optimistic **hop length** from port/Station → nearest terminal-type Station | ExpandKey component — prefer shorter; **not** boolean alone |
-| **Hop-count h (segment goals)** | Distance from port → nearest remaining multi-sink goal of **this** leg | A\* heuristic for current couple |
+| **Distance to segment goals** | Optimistic hop length from port/Station → nearest Station in **this couple’s multi-sink goal set** `G` | ExpandKey component — prefer shorter (local leg progress) |
+| **Segment-goal distance** | Same as ExpandKey component 2 | Preference only via ExpandKey — no competing `f=g+h` |
 
-**DECIDED:** Oracle++ stores **numeric distance** to terminal (and may store distance to next leg type), not only can/cannot reach. Unreachable = ∞ / filtered out of goals.
+**DECIDED:** Oracle++ stores **numeric distances** (to terminal **and** to current multi-sink set `G`), not only can/cannot reach. Unreachable = ∞ / filtered out of goals.
 
 **DECIDED product intent:** when building goals for leg i, filter candidates with Oracle++ so a sink is kept only if it is reachable from the **current tail** **and** (for i < k) it can still reach the **terminal** type Tk (and DEFAULT: intermediate non-transparent types T_{i+1}…T_{k-1}).
 
@@ -350,10 +354,11 @@ When Coupler expands legal children (or Assembler sorts multi-sink goals), build
 ExpandKey = (
   preferInUse,           // 0: 1 if neighbor already in use (tasking), else 0 — PREFER HIGHER
   preferNonTransparent,  // 1: 1 if NOT transparent, else 0 — PREFER HIGHER
-  distToTerminal,        // 2: Oracle++ hop distance to nearest Tk — PREFER LOWER
-  neighborRank,          // 3: SmartNode if type defines one, else 0 — PREFER HIGHER
-  stationName,           // 4: lexicographic — PREFER LOWER
-  portName               // 5: track id on hop — PREFER LOWER
+  distToSegmentGoals,    // 2: Oracle++ hops to nearest Station in this couple’s multi-sink set G — PREFER LOWER
+  distToTerminal,        // 3: Oracle++ hops to nearest terminal Tk — PREFER LOWER
+  neighborRank,          // 4: SmartNode if type defines one, else 0 — PREFER HIGHER
+  stationName,           // 5: lexicographic — PREFER LOWER
+  portName               // 6: track id on hop — PREFER LOWER
 )
 ```
 
@@ -361,59 +366,67 @@ ExpandKey = (
 |---|-----------|--------|--------|
 | 0 | **In use** | Higher (fill-first) | Neighbor has tasking / “already used”; type may disable fill-first → always 0 |
 | 1 | **Non-transparent** | Higher | `!stationType.transparent` — prefer demand types over pure path fillers |
-| 2 | **Distance to terminal** | Lower | **Oracle++** numeric length to nearest terminal Station (not bool) |
-| 3 | **NeighborRank (SmartNode)** | Higher | Type plugin; default 0 |
-| 4 | **Station name/id** | Lower | Stable id |
-| 5 | **Port/track name** | Lower | TrackId |
+| 2 | **Distance to this leg’s multi-sink goals** | Lower | **Oracle++** min hops from neighbor → any station in **current couple goal set `G`**. If neighbor ∈ `G`, distance = **0**. If unreachable to all of `G`, ∞. |
+| 3 | **Distance to terminal** | Lower | **Oracle++** numeric length to nearest terminal Station (booking last type Tk) |
+| 4 | **NeighborRank (SmartNode)** | Higher | Type plugin; default 0 |
+| 5 | **Station name/id** | Lower | Stable id |
+| 6 | **Port/track name** | Lower | TrackId |
+
+**Why both distances:**  
+- **Segment goals (2):** local progress for *this* `couple()` (e.g. prefer N-04 over N-08 when both non-transparent — N-04 is a goal / closer to an N goal).  
+- **Terminal (3):** longer-horizon topology (prefer sinks that leave a shorter path to Docking/X).  
+Compared **lexicographically**: segment distance wins ties before terminal distance.
 
 **DECIDED:**
 
 - **Tuple order**, not sum.  
-- **Pure + deterministic** given WorldSnapshot + candidate.  
+- **Pure + deterministic** given WorldSnapshot + candidate + current goal set `G`.  
 - Hard illegality is not a key — **Inspector** rejects; expand only ranks legal edges.  
 - **Prefilter** is earlier (Assembler); not an ExpandKey component.  
+- `G` is fixed for the duration of one `couple()` call (Assembler-built multi-sink goals).  
 - New columns only by product decision (order changes paths).
 
 #### Relation to A* `g` / `h`
 
 | Idea | Role |
 |------|------|
-| **ExpandKey** | Orders which neighbor to try next (and agenda goal order) |
-| **`g`** | **DEFAULT:** +1 per Link hop (search accounting) |
-| **`h`** | Oracle++ distance to nearest **segment multi-sink goal** |
+| **ExpandKey** | **Primary** order for which neighbor / agenda goal to try next |
+| **`g`** | **DEFAULT:** +1 per Link hop (search accounting / hygiene only) |
+| **distToSegmentGoals** | ExpandKey component 2 only — not a competing frontier `h` score |
 
-ExpandKey already encodes fill-first / transparent / terminal distance for **branch preference**. Do not double-count those as a summed scalar for expand order.
+**Frontier pop:** ExpandKey-dominated — e.g. `(g, ExpandKey…)`. Do not invent a second summed preference cost or `f=g+h` ranking.
 
 #### NeighborRank = SmartNode
 
 ```text
 neighborRank(neighbor.tasking, setup, liveData, candidate, request?) → Long
-// higher = try sooner among peers already tied on components 0–2
+// higher = try sooner among peers already tied on components 0–3
 // Default 0; not every StationType has a plugin
 ```
 
-#### A* heuristic `h` (segment goals)
+#### Oracle++ distances used by ExpandKey
 
 ```text
-// Rebuild when topology changes — not on every tasking change
+// Rebuild topology distances when Links/online change — not on every tasking change
 oracle.minHops[from][to] = BFS on online Links
-oracle.distToTerminal[port] = min hops to any Station of type Tk
 
-// Multi-sink goals G for this couple():
-h(n) = min over g in G of oracle.minHops[n][g]
-// ExpandKey.distToTerminal uses oracle.distToTerminal[neighbor]
+// Multi-sink goals G for this couple() — ExpandKey component 2:
+distToSegmentGoals(n) = min over g in G of oracle.minHops[n][g]
+// n ∈ G ⇒ 0
+
+// Terminal Tk — ExpandKey component 3:
+distToTerminal(n) = min hops to any Station of type Tk
 ```
 
-Per Coupler call without Oracle: one multi-source BFS **backward from all goals** once, then O(1) `h(n)` lookups — same idea, amortized per call.
+Per Coupler call without a full all-pairs Oracle: one multi-source BFS **backward from all goals** once, then O(1) distToSegmentGoals lookups — same idea, amortized per call.
 
 #### Registration
 
 ```text
 StationType.heuristics {
   checkpoint: bool
-  fillFirst: bool                 // default true — prefer already-tasked
-  transparentCost: Number | null  // null ⇒ use global default (e.g. 1) if transparent
-  edgeCostId / neighborRankId     // optional plugins
+  fillFirst: bool                 // default true — ExpandKey preferInUse
+  neighborRankId                  // optional SmartNode plugin (ExpandKey component 4)
 }
 ```
 
@@ -588,7 +601,7 @@ Loopbacks allowed; infinite loops not. Rebuild when topology changes, not taskin
 | Path fail / inspect fail at a goal → **continue inside Coupler** | **DECIDED** |
 | First inspect-OK goal → return (first-fit) | **DECIDED** |
 | Agenda = Oracle++-filtered, sorted **targets** (finishes e.g. `1:N1`, not full multi-hop paths) | **DECIDED** |
-| Sort: edgeCost, then NeighborRank if equal & type has one, then track name | **DECIDED** |
+| Sort / expand order: **ExpandKey** lexicographic (§3.7b) | **DECIDED** |
 | Full fabric paths precomputed into agenda? | **No** (**DECIDED**) |
 | Store pathTaken for debug / FailureReport / sticky | **DECIDED** |
 | Inspect = `Inspector.inspect` → `Task[] \| Failure` | **DECIDED** |
@@ -599,9 +612,9 @@ Loopbacks allowed; infinite loops not. Rebuild when topology changes, not taskin
 
 ```text
 // DECIDED segment attempt
-agenda = sort(Oracle++ filter(Prefilter pool))   // goals for type T_i; terminal-aware
+agenda = sortByExpandKey(Oracle++ filter(Prefilter pool))   // goals for type T_i; terminal-aware
 result = Coupler.couple(tail, goals=agenda, working, inspector, request, caps)
-// inspect/path fails stay in open set; first OK wins
+// inspect/path fails stay in ExpandKey frontier; first OK wins
 // unused goals → alts until type is checkpointed (C2c)
 ```
 
@@ -627,10 +640,10 @@ fail at leg j
 **Product note:** This can be a large graph and slow before UNSAT. Mitigations (implement; tune with goldens/profiling):
 
 - Oracle++ terminal/chain filters (fewer dead-end first-fits)  
-- edgeCost / NeighborRank (prefer fill-first, non-transparent, sticky)  
+- ExpandKey (fill-first, non-transparent, dist-to-G, dist-to-terminal, NeighborRank, names)  
 - Coupler caps: H, V, max expansions, wall clock → `BUDGET`  
 - Checkpoint as soon as **allowed** (after next non-transparent OK) to **shrink** future backtrack depth  
-- FailureReport should still explain first emptying stage, not dump full open set  
+- FailureReport should still explain first emptying stage, not dump full frontier  
 
 Exact numeric caps remain policy (**OPEN** numbers only — not the backtrack rule).
 
@@ -773,7 +786,7 @@ Same usability idea as `Link.online`: CLOSED ⇒ Coupler must not use it. **CLOS
 6. **Only whole-Booking SAT** commits overlay; fail on any leg discards all provisional tasking for that booking.  
 7. Setup only changed by humans.  
 8. Time only on Booking; Assembler time-slices by event instants in horizon; inspectors time-dumb.  
-9. NeighborRank only when edgeCost equal; `h` = hop-count Oracle to segment goals.  
+9. ExpandKey lexicographic order (§3.7b); NeighborRank is component 4 (not a separate edgeCost ladder).  
 10. Request on candidate Task: copied into taskingConfiguration **and** passed to inspect (option B).  
 11. Physical reachability Oracle uses same hop_key / H / V loop rules as Coupler.  
 12. Checkpoint a type only after next non-transparent leg succeeds (or last leg at SAT); clear if backtrack abandons that leg.
@@ -814,14 +827,14 @@ Inspectors **must not** hard-code fabric stations (“go to SW-2”). They accep
 
 | Question | Answer |
 |----------|--------|
-| Why try short path to endpoint B first? | **Search heuristic**: prefer fewer hops / earlier arrival at goal stations. When required facts are already in Task.context, short path wins quickly. |
+| Why try short path to endpoint B first? | **ExpandKey**: prefer non-transparent + lower `distToSegmentGoals` / `distToTerminal` (lexicographic). When required facts are already in Task.context, short corridor often wins first-fit. |
 | Does Inspector tell us to use a switch? | **No.** It only fails without needed context. It does not name transparent stations. |
 | How does the algorithm find SW then? | **Continued multi-sink search**. Arriving at B with bad Task.context = not a successful goal; keep expanding; path through transparent stations builds context on Tasks; later arrival at B may succeed. |
-| Prefer next leg station over extra transparent hops? | **Cost bias only**, if search still explores after goal-reject. **Unsafe** if first touch of B binds without inspect. |
+| Prefer next leg station over extra transparent hops? | **ExpandKey** `preferNonTransparent` + `distToSegmentGoals` (lexicographic) — not a summed hop/edgeCost ladder. **Unsafe** if first touch of B binds without inspect. |
 
-**DECIDED v1:** Goal success = reached candidate station with a Task that **inspect** accepts (new tasking returned). Goal-reject ≠ search failure; only open-set exhaustion / budget is failure.
+**DECIDED v1:** Goal success = reached candidate station with a Task that **inspect** accepts (new tasking returned). Goal-reject ≠ search failure; only **frontier** exhaustion / budget is failure.
 
-**DEFAULT cost bias:** small positive cost per hop (or per transparent station) so simple corridors are tried first.
+**Ranking:** **ExpandKey** frontier only (§3.7b / §8.2). No separate `f=g+h` preference; no summed edgeCost.
 
 ---
 
@@ -840,14 +853,14 @@ Inspector.inspect(setup, tasking, request, liveData) → Task[] | Failure
 // Returns FULL Task[] for that station (working copy). Context lives on Tasks.
 
 // Optional ranking for Assembler goal list / Coupler ties (§3.7b):
-// Use NeighborRank / edgeCost plugins — NOT a separate rank_cost API.
-// DEFAULT: neighborRank = 0; sort by edgeCost then track name.
+// ExpandKey ranking — NOT a separate rank_cost API or summed edgeCost.
+// NeighborRank = ExpandKey component 4 (SmartNode); default 0.
 ```
 
 | Stage | When | Inputs | Use |
 |-------|------|--------|-----|
 | **Prefilter** | Assembler before agenda/Coupler | setup, request, liveData | Shrink candidate stations |
-| **inspect** | Coupler when peeled target | setup, tasking(+candidate), request, liveData | Accept/reject + new tasking |
+| **inspect** | Coupler at multi-sink goal (and every transparent visit) | setup, tasking(+candidate), request, liveData | Accept/reject + new Task[] |
 
 **Wrong:** full inspect at Assembler dropping stations for missing path stamps.  
 **Right:** prefilter only irreversible/static checks; path facts checked in **inspect** when candidate Task carries context.
@@ -882,7 +895,7 @@ Inspector.inspect(setup, tasking, request, liveData):
 for station in pool(stationTypeId) if OPEN and not checkpoint-closed:
   if Prefilter.canUse(station.setup, leg.request, station.liveData).ok:
     candidates.append(station)
-// candidates → Oracle filter → agenda → Coupler.couple / inspect when peeled
+// candidates → Oracle++ filter → ExpandKey-sorted agenda → Coupler.couple / inspect at goal
 ```
 
 ### 5.3 Per-StationType guide
@@ -891,7 +904,7 @@ for station in pool(stationTypeId) if OPEN and not checkpoint-closed:
 2. Prefilter reject codes  
 3. inspect rules + Failure codes  
 4. What goes into Task.context for downstream  
-5. heuristics.checkpoint / fillFirst / transparentCost  
+5. heuristics.checkpoint / fillFirst / neighborRankId (ExpandKey §3.7b)  
 6. Unit tests  
 
 **v1 toy StationTypes (goldens / walkthroughs):**
@@ -934,9 +947,9 @@ Policy {
     max_wall_ms: 500
     forbid_repeat_hop_key: true
     forbid_immediate_link_backtrack: true  // DEFAULT
-    search: "bfs" | "astar"       // DEFAULT "astar"
-    // Dynamic costs + SmartNode: see §3.7b (edgeCost / neighborRank use tasking+liveData)
-    use_dynamic_edge_costs: true
+    search: "bfs" | "astar"       // DEFAULT "astar" — accounting only; preference = ExpandKey (§3.7b), not f=g+h
+    // ExpandKey ranking — preferInUse, nonTrans, distToG, distToTerminal, NeighborRank, names
+    use_expand_key: true          // DECIDED required for v1 product preference
     use_neighbor_rank: true
   }
   assembler: {
@@ -944,7 +957,7 @@ Policy {
     // DECIDED C2b: inter-leg backtrack floor = last Checkpoint (not a numeric depth of 0)
     inter_leg_backtrack: "to_last_checkpoint"   // DECIDED v1 — not "off" / not backtrack_depth: 0
     sticky_prefer: true
-    use_neighbor_rank_for_goals: true  // rank leg candidate stations with same SmartNode inputs
+    use_neighbor_rank_for_goals: true  // ExpandKey component 4 on agenda stations
   }
   cache: {
     sticky_sat: true
@@ -977,12 +990,12 @@ Policy {
 
 ### 8.0 Assembler ↔ Coupler contract
 
-| | **Assembler** | **Coupler (multi-sink A\*/BFS)** |
+| | **Assembler** | **Coupler (multi-sink + ExpandKey frontier)** |
 |--|---------------|----------------------------------|
-| **Job** | Legs, prefilter, Oracle++ goal set, alts policy, checkpoints, sticky, commit | One multi-sink search from **tail out-track** or **S0** over all goals; inspect at goal in open set |
-| **Calls** | One `couple()` per segment attempt; re-call for next leg or **inter-leg backtrack to last Checkpoint (C2b DECIDED)** | Path + inspect fails for goals stay inside the same call |
+| **Job** | Legs, prefilter, Oracle++ goal set, alts policy, checkpoints, sticky, commit | One multi-sink search from **tail out-track** or **S0** over all goals; **ExpandKey frontier**; inspect at goal |
+| **Calls** | One `couple()` per segment attempt; re-call for next leg or **inter-leg backtrack to last Checkpoint (C2b DECIDED)** | Path + inspect fails stay in the **same frontier** |
 | **Success** | Working overlay + route; commit only on full Booking SAT | Path + inspect-OK `Task[]` on first-fit goal |
-| **Failure** | UNSAT; discard overlay | Exhaust open set / budget → null |
+| **Failure** | UNSAT; discard overlay | Exhaust frontier / budget → null |
 | **Transparent** | Not demand legs | Middle of Link graph |
 | **Does not** | One A\* per Station for within-segment retries | Own multi-booking queue / sticky |
 
@@ -1024,7 +1037,7 @@ function placeBooking(booking, world, opts={force:false}):
     if candidates empty: return fail(NO_CANDIDATES, legIndex)
 
     agenda = Oracle++.goalsForLeg(tail, candidates, booking.legs[legIndex..], terminal=last)
-    // sort: edgeCost, NeighborRank, track name
+    // sort: ExpandKey (§3.7b / §8.1c)
     if agenda empty: return fail(UNREACHABLE, legIndex)
 
     result = Coupler.couple(tail, goals=agenda, working, inspector, leg.request, caps)
@@ -1053,33 +1066,36 @@ function placeBooking(booking, world, opts={force:false}):
 ```text
 // §3.7b — do NOT sum components
 compare ExpandKey:
-  0 preferInUse          // higher first (fill-first)
-  1 preferNonTransparent // higher first
-  2 distToTerminal       // lower first (Oracle++ length to Tk)
-  3 neighborRank         // higher first (SmartNode; default 0)
-  4 stationName          // lower first (lexicographic)
-  5 portName             // lower first (lexicographic)
+  0 preferInUse             // higher first (fill-first)
+  1 preferNonTransparent    // higher first
+  2 distToSegmentGoals      // lower first (Oracle++ to this couple’s multi-sink set G)
+  3 distToTerminal          // lower first (Oracle++ to booking terminal Tk)
+  4 neighborRank            // higher first (SmartNode; default 0)
+  5 stationName             // lower first (lexicographic)
+  6 portName                // lower first (lexicographic)
 // sticky preferred station may be forced first when sticky_prefer (policy override)
 ```
 
 ### 8.2 Coupler (multi-sink — DECIDED)
 
 **Contract:** `couple(tail, goals, …)` always multi-sink.  
-`goals` = Assembler agenda (Oracle++ + prefilter + sort).  
-Inspect rejects and short-path failures **continue in the same open set**.
+`goals` = Assembler agenda (Oracle++ + prefilter + **ExpandKey** sort).  
+Inspect rejects and short-path failures **continue in the same frontier**.
+
+**Ranking (DECIDED):** **ExpandKey** is the only product preference (§3.7b).  
+There is **no** separate frontier ranking by classic A\* `f = g + h` that can override ExpandKey.
 
 ```text
 function couple(tail, goals, working, inspector, request, caps):
-  // tail = null ⇒ virtual S0 → candidate start stations (first leg)
-  // tail = bound OUT track ⇒ expand Links from that out only
-  // goals = finishes { stationId, in?, out? } of next StationType
+  // tail = null ⇒ virtual S0; else expand from bound OUT track
+  // goals G = multi-sink finishes for this segment
 
-  open = priority queue  // f = g + h; g = hop count; h = Oracle++ dist to nearest segment goal
+  frontier = priority queue   // pop: (g, ExpandKey…) — ExpandKey-dominated
   push starts from tail / S0 with context0 = copy(prev Task.context) or {}
   expansions = 0
 
-  while open not empty:
-    s = pop  // best f among open; when expanding children use ExpandKey order (§3.7b)
+  while frontier not empty:
+    s = pop_best(frontier)   // min g, then ExpandKey — NOT f=g+h preference
     expansions++
     if over budget: return null, BUDGET
 
@@ -1089,18 +1105,25 @@ function couple(tail, goals, working, inspector, request, caps):
       if outcome is Task[]:
         return { pathTaken, target, stationId, tasking: outcome, … }
       else:
-        continue  // INSPECT_FAIL — stay in open set
+        continue  // INSPECT_FAIL — stay in frontier
 
-    neighbors = legal_edges(s)  // Link OUT→IN or legalPairs in→out; hop_key, H, V, online, CAPACITY
-    sort neighbors by ExpandKey lexicographic (§3.7b)
+    neighbors = legal_edges(s)  // Link OUT→IN or legalPairs; hop_key, H, V, online, CAPACITY
+    sort neighbors by ExpandKey(G, …) lexicographic (§3.7b)
     for edge in neighbors:
-      g2 = s.g + 1   // hop baseline for A* accounting
-      push neighbor with f = g2 + h(Oracle++ dist to nearest multi-sink goal)
+      child.g = s.g + 1   // hop count only — search hygiene
+      push frontier(child)
 
   return null, UNREACHABLE | CAPACITY
 ```
 
-**Oracle++ `h`:** hop distances ignoring tasking; dynamic preference in **`edgeCost` / NeighborRank** on `g`.
+| Term | Role |
+|------|------|
+| **Frontier** | Pending partial paths (required structure; formerly “open set”) |
+| **ExpandKey** | **Only** preference ranking |
+| **`g`** | Hop length so far — does not re-encode ExpandKey |
+| **Oracle++ distToG** | Inside ExpandKey component 2 — not a competing pop score |
+
+**Do not implement:** summed edgeCost ladder; frontier pop by `f=g+h` that reorders vs ExpandKey; Assembler peel / one A\* per Station.
 
 ### 8.3 Bound out-track / tail — **DECIDED**
 
@@ -1180,34 +1203,42 @@ Return `BUDGET` / wall clock exceed; do not hang. **DEFAULT** `max_wall_ms: 500`
 
 ## 10. Cache: sticky SAT & negative UNSAT
 
-### 10.1 World revisions
+**Canonical contract:** **§3.10** (relevance-scoped sticky SAT + UNSAT bust tables).  
+This section is the short implementer summary — **not** a second global-token-only contract.
+
+### 10.1 World epochs (plant-level I/O may still bump tokens)
+
+Coarse plant revisions may exist for Kafka/wake fan-out:
 
 ```text
-topology_rev      // cables, yard maps, devices online
-setup_rev         // car/yard setup changes
-catalog_rev       // cars/classes added-removed
+topology_rev      // Links, online maps, devices online
+setup_rev         // station setup changes
+catalog_rev       // stations/types added-removed
 policy_rev
-occupancy_rev     // any reserve/release (for SAT validity)
-hopeful_rev       // only: release, topology expand, setup enable, catalog add, policy loosen
+occupancy_rev     // any reserve/release
+// optional coarse hopeful_rev for wake I/O only — NOT the sticky validity contract
 ```
 
-### 10.2 SAT validity
+**Sticky validity is per booking** via `StickyRecord.relevantSetupEpochs` / `relevantTopoEpochs` (§3.10) — not “whole plant `hopeful_rev` unchanged.”
+
+### 10.2 SAT validity (plan-relevant, scoped)
 
 Snapshot valid if:
 
-- legs_hash unchanged  
-- all reserved hop_keys/cars still held by this booking **or** still free if soft snapshot  
-- topology_rev, setup_rev for used devices, policy_rev match snapshot token  
+- demandHash / legs unchanged  
+- plan resources still held by this booking (hard-claim)  
+- **relevant** topology/setup/policy epochs for **stations/links/types on the SAT plan** still match  
 
-**DECIDED v1:** on SAT, **hard-claim** reservations until release.
+**DECIDED v1:** on SAT, **hard-claim** reservations until release.  
+Unrelated plant changes **do not** bust this booking’s SAT (§3.10 SAT bust table).
 
-### 10.3 UNSAT validity (hopeful)
+### 10.3 UNSAT validity (hope only, scoped)
 
-Cached UNSAT reusable while `hopeful_rev` and `legs_hash` and `policy_rev` (if tighter) unchanged.
+Cached UNSAT reusable while **this booking’s demand** is unchanged and **no hopeful change** on **relevant** types/stations/links (§3.10 unsat bust table).
 
-**Do not** bust UNSAT solely because `occupancy_rev` increased from **new claims**.
+**Do not** bust UNSAT solely because occupancy increased from **new claims** elsewhere.
 
-**Do** bust on release, new cable/pair, car online, setup change that could enable, policy loosen, legs edit.
+**Do** bust on: demand edit; setup on relevant types; Link opened / station OPENED useful to relevant types; tasking freed on relevant types; policy loosen.
 
 ---
 
@@ -1238,7 +1269,7 @@ Cached UNSAT reusable while `hopeful_rev` and `legs_hash` and `policy_rev` (if t
 
 **Trace (debug):** one resolve id; log leg start, candidate counts, coupler result, fail stage.
 
-**FailureReport samples (DECIDED):** support **capped** `inspector_samples` / failed goal arrivals (stationId, code, short path summary). Not the full open set. May be empty on a given result if none collected; the capability is in scope.
+**FailureReport samples (DECIDED):** support **capped** `inspector_samples` / failed goal arrivals (stationId, code, short path summary). Not the full frontier. May be empty on a given result if none collected; the capability is in scope.
 
 ---
 
@@ -1420,7 +1451,7 @@ edgeMeta: IntArray  // cable id / yard id for occupancy checks
 
 #### 18.2.4 Search state without GC thrash
 
-Naive: each open-set entry = new `Node(port, g, parent, contextMap)`.
+Naive: each frontier entry = new `Node(port, g, parent, contextMap)`.
 
 Better patterns:
 
@@ -1430,14 +1461,14 @@ Better patterns:
 4. **Context:**  
    - If sparse keys: small fixed schema → pack into `Long` / `Int` bitset (e.g. bit per known stamp).  
    - If maps required: **persistent/shared structure** or copy-on-write only when a hop publishes — not a new `HashMap` every edge.  
-   - Closed set key = `(portId, contextFingerprint)` — fingerprint must be cheap (`Long` xor of stamps).  
+   - Closed-set key = `(portId, contextFingerprint)` — fingerprint must be cheap (`Long` xor of stamps).  
 5. **Closed set:** `LongOpenHashMap` / Eclipse Collections / fastutil **primitive** maps, or two-level: `BooleanArray` if context is empty, else open-addressed long set. Avoid `HashSet<Pair<Int, Map<…>>>`.  
-6. **Open set:** binary heap of **ints** (node indices) + parallel `g[]`/`f[]` arrays; or specialized int-heap. Java `PriorityQueue` of objects works for v1 but allocates.
+6. **Frontier:** priority by `(g, ExpandKey…)` — binary heap of **ints** (node indices) + parallel `g[]` / ExpandKey arrays; or specialized int-heap. **Not** a separate `f[]` preference ladder. Java `PriorityQueue` of objects works for v1 but allocates.
 
 **DEFAULT v1 pragmatic:**  
 - Port = `Int`  
 - Closed = `LongSet` of packed `(port, contextBits)` or just `port` if context empty for that topology  
-- Open = `PriorityQueue` of a **recycled** node type **or** int-heap  
+- Frontier = `PriorityQueue` ordered ExpandKey-dominated **or** int-heap  
 - Profile before writing a custom allocator
 
 #### 18.2.5 Memory & GC

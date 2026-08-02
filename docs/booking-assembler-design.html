@@ -941,7 +941,7 @@
       <div class="toc-section">Core</div>
       <a href="#layers">Outer vs inner</a>
       <a href="#assembler">Assembler</a>
-      <a href="#astar">Coupler (A* / BFS)</a>
+      <a href="#astar">Coupler (ExpandKey frontier)</a>
       <a href="#yards">Tracks, Links &amp; transparent</a>
       <a href="#heuristics">Heuristics</a>
       <div class="toc-section">Ops</div>
@@ -1071,19 +1071,19 @@
           </tr>
           <tr>
             <td><strong>Coupler</strong></td>
-            <td>Inner engine: one multi-sink <code>couple(tail, goals)</code> per segment on Stations + Tracks + Links; edgeCost + NeighborRank; transparent path fillers (inspect every hop).</td>
+            <td>Inner engine: one multi-sink <code>couple(tail, goals)</code> per segment; <strong>ExpandKey frontier</strong> (not summed edgeCost / not f=g+h); transparent path fillers (inspect every hop).</td>
           </tr>
           <tr>
             <td><strong>Oracle++</strong></td>
-            <td>Topology insight: reachability / terminal (and chain) filters for multi-sink <strong>goals</strong>; hop-count is <code>h</code> only for A*. Rebuild on topology change, not tasking. (Legacy “Oracle” = Oracle++ unless only <code>h</code>.)</td>
+            <td>Topology insight: reachability / terminal (and chain) filters for multi-sink <strong>goals</strong>; also feeds ExpandKey <code>distToSegmentGoals</code> / <code>distToTerminal</code>. Rebuild on topology change, not tasking. (Legacy “Oracle” = Oracle++.)</td>
           </tr>
           <tr>
             <td><strong>Agenda / goals</strong></td>
-            <td>Assembler-owned sorted multi-sink targets (finishes of next type, Oracle++-filtered). One <code>Coupler.couple(tail, goals)</code>; inspect fails stay inside the open set. Unused goals = alts until the type is checkpointed.</td>
+            <td>Assembler-owned ExpandKey-sorted multi-sink targets (finishes of next type, Oracle++-filtered). One <code>Coupler.couple(tail, goals)</code>; inspect fails stay inside the <strong>ExpandKey frontier</strong>. Unused goals = alts until the type is checkpointed.</td>
           </tr>
           <tr>
-            <td><strong>Sticky / hopeful token</strong></td>
-            <td>Cache SAT plan or UNSAT report under demand + relevant world epochs; reuse when nothing hopeful changed.</td>
+            <td><strong>Sticky (relevance-scoped)</strong></td>
+            <td>Cache SAT plan or UNSAT report under demand + <strong>relevant</strong> world epochs (BUILD_SPEC §3.10) — not a single global hopeful_rev as the validity contract.</td>
           </tr>
         </tbody>
       </table>
@@ -1319,7 +1319,7 @@ flowchart TB
             <div class="consist" id="vizConsist"></div>
             <div class="consist-legend" id="consistLegend">
               Bound demand Stations + transparent path Stations already on the Booking route.
-              Mid-A*, switches may appear as “expanding” before N/D is bound. Commit is whole-Booking.
+              Mid-search, switches may appear as “expanding” before N/D is bound. Commit is whole-Booking.
             </div>
           </div>
           <div class="viz-card">
@@ -1332,7 +1332,7 @@ flowchart TB
             <div class="cand-list" id="vizCands"></div>
           </div>
           <div class="viz-card">
-            <h4>A* path so far (this Coupler call)</h4>
+            <h4>Frontier path so far (this Coupler call)</h4>
             <div class="path-hops" id="vizHops"></div>
           </div>
           <div class="viz-card fabric-card" style="grid-column: 1 / -1">
@@ -1389,7 +1389,7 @@ flowchart TB
           <p style="margin:0;max-width:none;font-size:0.9rem;color:var(--muted)">
             One segment: start = <strong>tail out-track</strong> (accepted Task.output, e.g. <code>R-17:out1</code>)
             or virtual S0 for first type; goals = Oracle++-filtered finishes of next type.
-            Bounded multi-sink A* on <strong>Stations + Tracks + Links</strong> with edgeCost + NeighborRank;
+            Bounded multi-sink search on <strong>Stations + Tracks + Links</strong> with <strong>ExpandKey frontier</strong>;
             transparent stations are path fillers — inspect <strong>every visit</strong> (C2d).
           </p>
         </div>
@@ -1399,13 +1399,13 @@ flowchart TB
         <strong>Contract (Option A — multi-sink):</strong> Assembler runs demand legs and Booking state.
         One <code>couple(tail, goals)</code> per segment finds a successful path to <em>some</em> goal
         (any number of transparent stations in the middle) —
-        <strong>first-fit inspect OK</strong>, or <strong>fail when open set / budget is exhausted</strong>.
+        <strong>first-fit inspect OK</strong>, or <strong>fail when ExpandKey frontier / budget is exhausted</strong>.
         Path/inspect fails stay inside Coupler; Assembler does <em>not</em> peel targets or re-call per goal.
       </div>
 
       <table>
         <thead>
-          <tr><th></th><th>Assembler</th><th>Coupler (multi-sink A*/BFS)</th></tr>
+          <tr><th></th><th>Assembler</th><th>Coupler (multi-sink ExpandKey frontier)</th></tr>
         </thead>
         <tbody>
           <tr>
@@ -1426,7 +1426,7 @@ flowchart TB
           <tr>
             <td><strong>Failure</strong></td>
             <td>May backtrack to last Checkpoint (C2b); else Booking UNSAT; discard working overlay</td>
-            <td>Open set empty / budget — no acceptable path among goals</td>
+            <td>Frontier empty / budget — no acceptable path among goals</td>
           </tr>
           <tr>
             <td><strong>Transparent</strong></td>
@@ -1452,7 +1452,7 @@ for each demand leg (non-transparent StationType T_i):
   // first leg: tail = virtual S0 (no inbound Link; no input track used on start Stations)
   // later legs: tail = previous accepted Task.output out-track (e.g. R-17:out1)
   result = Coupler.couple(tail, goals=goals, working, inspector, request, caps)
-  // inspect / path fails stay inside Coupler open set; first OK wins (first-fit)
+  // inspect / path fails stay inside Coupler ExpandKey frontier; first OK wins (first-fit)
   if fail:
     // may backtrack to last Checkpoint (C2b) and retry with remaining alts
     // never reopen already-checkpointed StationTypes
@@ -1465,7 +1465,7 @@ for each demand leg (non-transparent StationType T_i):
 
 // Coupler — one multi-sink segment
 couple(tail_out_track | S0, goals, working_tasking):
-  multi-sink A*  f = g(edgeCost) + h(hop-count to nearest remaining goal)
+  multi-sink frontier  pop = (g, ExpandKey…)  // ExpandKey-dominated; not f=g+h
   expand via Links + legal in→out; transparent: inspect every visit (may extend Task.context)
   on reach goal: try inspect; fail → continue search (goal stays rejected on this path only)
   first inspect-OK goal → return; exhausted/budget → failure
@@ -1526,34 +1526,36 @@ couple(tail_out_track | S0, goals, working_tasking):
       </div>
 
       <!-- ========== ASTAR ========== -->
-      <h2 id="astar">Coupler — multi-sink bounded A* / BFS</h2>
+      <h2 id="astar">Coupler — multi-sink ExpandKey frontier</h2>
       <p>
         Each coupling segment is a path search on
         <strong>Stations + Tracks + Links</strong>, not on StationType labels alone.
-        Dynamic <strong>edgeCost</strong> ranks legal neighbors; <strong>NeighborRank</strong>
-        (SmartNode) breaks ties; hop-count <code>h</code> (BFS on online Links to nearest goal)
-        is optimistic and ignores tasking. Goal set is built by Assembler via
+        <strong>ExpandKey</strong> ranks legal neighbors (lexicographic); <strong>NeighborRank</strong> is component 4
+        (SmartNode). Oracle++ hop distances feed ExpandKey components
+        <code>distToSegmentGoals</code> / <code>distToTerminal</code> (optimistic, ignore tasking) —
+        not a competing classic A* <code>f=g+h</code> pop score. Goal set is built by Assembler via
         <strong>Oracle++</strong> (reachability + terminal/chain) before the call.
       </p>
 
       <pre>// One segment — Option A multi-sink (DECIDED)
 starts = tail OUT track (accepted Task.output) | virtual S0 → first-type goals
-goals  = Oracle++ filter(Prefilter pool of next demand StationType)
+goals  = sortByExpandKey(Oracle++ filter(Prefilter pool of next demand StationType))
 
-search = A*  f = g(edgeCost) + h(hop-count to nearest remaining goal)
-// edgeCost may include hop baseline, transparent penalty, fill-first empty penalty
+search = frontier pop (g, ExpandKey…)   // ExpandKey-dominated; not f=g+h
+// ExpandKey: preferInUse, preferNonTransparent, distToSegmentGoals, distToTerminal, neighborRank, names
+// g = hop count only (hygiene); distToG lives inside ExpandKey
 
 until first inspect-OK goal OR budget exhausted:
   expand via Links and legal in→out pairs on stations
   transparent hop: inspect every visit (may write Task.context)
   prune: repeat hop_key, hop budget H, visits/station V, max expansions
-  at goal: inspect(setup, tasking+candidate, request, liveData); fail → continue</pre>
+  at goal: inspect(setup, tasking+candidate, request, liveData); fail → continue frontier</pre>
 
-      <h3>Why multi-sink (not one A* per Station)</h3>
+      <h3>Why multi-sink (not one search per Station)</h3>
       <p>
-        One search from the tail toward <em>all</em> candidate stations explores the
-        transparent fabric once. Prefer that over N independent A* runs that re-walk
-        the same corridors.
+        One ExpandKey frontier from the tail toward <em>all</em> candidate stations explores the
+        transparent fabric once. Prefer that over N independent single-sink runs that re-walk
+        the same corridors (Option B peel — not v1).
       </p>
 
       <h3>Two reasons for multi-switch loopbacks</h3>
@@ -1698,12 +1700,12 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
           <tr>
             <td><strong>First-fit on stable order</strong></td>
             <td>Coupler multi-sink / agenda sort</td>
-            <td>DECIDED first-fit: edgeCost, then NeighborRank, then track name. Sticky id preferred when equal. No full optimality.</td>
+            <td>DECIDED first-fit: ExpandKey lexicographic (§3.7b). Sticky id preferred when equal. No full optimality.</td>
           </tr>
           <tr>
-            <td><strong>Fill-first / edgeCost</strong></td>
+            <td><strong>Fill-first / ExpandKey[0]</strong></td>
             <td>Coupler</td>
-            <td>Prefer already-tasked peers; transparent penalty; hop baseline. NeighborRank only on equal cost.</td>
+            <td>Lexicographic ExpandKey: preferInUse → preferNonTransparent → distToG → distToTerminal → NeighborRank → names. Not a summed edgeCost.</td>
           </tr>
           <tr>
             <td><strong>Sticky snapshot</strong></td>
@@ -1721,9 +1723,9 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
             <td>~One fabric search per segment toward all multi-sink goals (Option A).</td>
           </tr>
           <tr>
-            <td><strong>Oracle++ goals + hop-count h</strong></td>
+            <td><strong>Oracle++ + ExpandKey distances</strong></td>
             <td>Before / during Coupler</td>
-            <td>Oracle++ filters goals (reachability + terminal/chain). <code>h</code> = BFS hop-count on online Links to nearest goal; optimistic vs tasking.</td>
+            <td>Oracle++ filters goals (reachability + terminal/chain). Same hop BFS feeds ExpandKey distToSegmentGoals / distToTerminal — not a separate f=g+h ranking.</td>
           </tr>
           <tr>
             <td><strong>Hop / visit / expansion budgets</strong></td>
@@ -1752,7 +1754,7 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
       <ol>
         <li><strong>Sticky hit</strong> → return cached plan (fastest).</li>
         <li>Per leg: index by StationType → Prefilter → rank → Oracle++ goal filter → goals.</li>
-        <li><strong>~One</strong> multi-sink bounded A*/BFS per segment (not one search per Station / target).</li>
+        <li><strong>~One</strong> multi-sink ExpandKey frontier search per segment (not one search per Station / target).</li>
         <li>Hard caps: <code>H</code>, <code>V</code>, <code>max_expansions</code>, wall clock.</li>
       </ol>
 
@@ -1789,7 +1791,7 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
       <ul>
         <li>Track-level state + hop_key anti-loop</li>
         <li>H / V / max expansions</li>
-        <li>Oracle++ goal filter + hop-count <code>h</code></li>
+        <li>Oracle++ goal filter + ExpandKey distances (distToG / distToTerminal)</li>
         <li>Multi-sink Option A; checkpoint; Prefilter prune</li>
         <li>Negative sticky so failed Bookings do not rescan when nothing hopeful changed</li>
       </ul>
@@ -1840,7 +1842,7 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
           </tr>
           <tr>
             <td><strong>Separate geometry vs tasking</strong></td>
-            <td>Oracle++ ignores tasking (optimistic); Coupler applies edgeCost / inspect — avoids constant topology rebuild.</td>
+            <td>Oracle++ ignores tasking (optimistic distances); Coupler applies ExpandKey + inspect — avoids constant topology rebuild.</td>
             <td>Some false-positive couple expansions until inspect fails.</td>
           </tr>
         </tbody>
@@ -1857,7 +1859,7 @@ flowchart LR
   end
   subgraph reduce_mesh["Cheaper fabric search"]
     M[Multi-sink]
-    A[A* + edgeCost + h]
+    A[ExpandKey frontier]
     B[Budgets H V exp]
     L[hop_key anti-loop]
     CL[Optional cluster]
@@ -1870,7 +1872,7 @@ flowchart LR
       <!-- ========== FAILURES ========== -->
       <h2 id="failures">Failure reasons</h2>
       <p>
-        Do not narrate the A* open set. Fail at the
+        Do not dump the Coupler frontier. Fail at the
         <strong>first pipeline stage that empties options</strong>, and attach a small report.
       </p>
 
@@ -1965,7 +1967,7 @@ flowchart LR
         <strong><code>docs/BUILD_SPEC.md</code></strong> — primary build contract for <strong>Trackplan</strong> (v1).
         Status tags: <strong>DECIDED</strong> / <strong>DEFAULT</strong> / <strong>OPEN</strong>.
         Includes Station model, Prefilter + Inspector, transparent types, Assembler + Coupler,
-        edgeCost / NeighborRank / Oracle++, time slices, sticky, goldens G1–G12.
+        ExpandKey / Oracle++, time slices, sticky, goldens G1–G12.
         Handoff rationale: <code>docs/SPEC.md</code> (older Class/Car/Yard wording superseded by BUILD_SPEC).
       </div>
 
@@ -2055,7 +2057,7 @@ flowchart LR
           </tr>
           <tr>
             <td>First-fit vs score all multi-sink goals</td>
-            <td><strong>DECIDED:</strong> first-fit (edgeCost + NeighborRank + track name)</td>
+            <td><strong>DECIDED:</strong> first-fit ExpandKey lexicographic (BUILD_SPEC §3.7b)</td>
             <td>Need best path among K goals for cost reasons later?</td>
           </tr>
           <tr>
@@ -2373,7 +2375,7 @@ flowchart LR
           {
             phase: "coupler", leg: 1, meta: "EXPAND · Y1 ExpandKey",
             title: "EXPAND Y1@IN1 · ExpandKey children",
-            body: "Legal outs from IN1 ranked <strong>lexicographic ExpandKey</strong> (not summed): <code>preferInUse</code> → <code>preferNonTransparent</code> → <code>distToTerminal</code> → rank → name → port.<br><strong>Children (ExpandKey order):</strong><br>1. <code>1:Y1:1</code> → N-04:1 [goal] non-trans · dist low<br>2. <code>1:Y1:3</code> → N-08:1 [not-goal] non-trans · dist ∞<br>3. <code>1:Y1:2</code> → Y2:1 [transparent]<br>Illegal <code>1→6</code> (N-12) is not a child until re-entry IN5.",
+            body: "Legal outs from IN1 ranked <strong>lexicographic ExpandKey</strong> (not summed): <code>preferInUse</code> → <code>preferNonTransparent</code> → <code>distToSegmentGoals</code> (to multi-sink G) → <code>distToTerminal</code> → rank → name → port.<br><strong>Children (ExpandKey order):</strong><br>1. <code>1:Y1:1</code> → N-04:1 [goal] non-trans · distToG=0<br>2. <code>1:Y1:3</code> → N-08:1 [not-goal] non-trans · distToG=∞<br>3. <code>1:Y1:2</code> → Y2:1 [transparent]<br>Illegal <code>1→6</code> (N-12) is not a child until re-entry IN5.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "expand outs", active: true },
@@ -2394,7 +2396,7 @@ flowchart LR
           {
             phase: "coupler", leg: 1, meta: "GOAL? N-04 fail",
             title: "Try #1: 1:Y1:1 → N-04 · INSPECT_FAIL",
-            body: "Open set pops N-04 first (ExpandKey). Hop path <code>1:R-17:1</code>, <code>1:Y1:1</code>. Cable <code>e_y1_n</code>. GOAL? N-04 → <strong>INSPECT_FAIL missing clearance.y2_stamp</strong>. Same couple continues (Option A) — do not peel; next ExpandKey sibling is N-08, not Y2.",
+            body: "Frontier pops N-04 first (ExpandKey). Hop path <code>1:R-17:1</code>, <code>1:Y1:1</code>. Cable <code>e_y1_n</code>. GOAL? N-04 → <strong>INSPECT_FAIL missing clearance.y2_stamp</strong>. Same couple continues (Option A) — do not peel; next ExpandKey sibling is N-08, not Y2.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→1 tried" },
@@ -2402,7 +2404,7 @@ flowchart LR
             ],
             ctx: "cabinets=4 · clearance.y2_stamp: missing",
             candidates: [
-              { id: "N-04", st: "fail", stage: "accept", why: "INSPECT_FAIL · missing stamp · keep open set" },
+              { id: "N-04", st: "fail", stage: "accept", why: "INSPECT_FAIL · missing stamp · keep frontier" },
               { id: "N-08", st: "fail", stage: "prefilter", why: "next ExpandKey child (not-goal)" },
               { id: "Y2", st: "pass", stage: "prefilter", why: "later · transparent" },
             ],
@@ -2415,7 +2417,7 @@ flowchart LR
           {
             phase: "coupler", leg: 1, meta: "NOT_GOAL N-08",
             title: "Try #2: 1:Y1:3 → N-08 · not a goal",
-            body: "Next open state by ExpandKey: hop <code>1:Y1:3</code> Link→ N-08:1 (cable <code>e_y1_n08</code>). Non-transparent ranks above Y2, so N-08 is tried before transparent. Arrive ≠ success: <strong>NOT_GOAL</strong> (4 seats · never multi-sink). No useful outs on toy map → dead branch; continue open set.",
+            body: "Next frontier state by ExpandKey: hop <code>1:Y1:3</code> Link→ N-08:1 (cable <code>e_y1_n08</code>). Non-transparent ranks above Y2, so N-08 is tried before transparent. Arrive ≠ success: <strong>NOT_GOAL</strong> (4 seats · never multi-sink). No useful outs on toy map → dead branch; continue frontier.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→3" },
@@ -2452,7 +2454,7 @@ flowchart LR
             nodesOn: ["y1", "y2"],
             edgesOn: ["e_y1_y2", "e_y2_n", "e_y2_y1"],
             edgesDone: ["e_r_y1", "e_y1_n", "e_y1_n08"],
-            notes: "Order from Y1@IN1 open set: N-04 fail → N-08 not-goal → Y2 stamp. Not Y2 immediately after N-04.",
+            notes: "Order from Y1@IN1 ExpandKey frontier: N-04 fail → N-08 not-goal → Y2 stamp. Not Y2 immediately after N-04.",
           },
           {
             phase: "coupler", leg: 1, meta: "GOAL? N-04 OK",

@@ -4,7 +4,7 @@
 **Audience:** humans and agents who will build test tooling after (or alongside) the domain engine  
 **Related:** [BUILD_SPEC.md](./BUILD_SPEC.md) (canonical model §1–§3, goldens G1–G12), [SPEC.md](./SPEC.md), [booking-assembler-design.html](./booking-assembler-design.html) (narrative walkthroughs)
 
-**Canonical vocabulary:** StationType, Station, Track, Link, Setup, Tasking, Task, Request, Prefilter, Inspector, Booking, Leg, Route, Hop, Binding, Assembler, Coupler, Oracle++, agenda, multi-sink, transparent, liveData, edgeCost, NeighborRank.
+**Canonical vocabulary:** StationType, Station, Track, Link, Setup, Tasking, Task, Request, Prefilter, Inspector, Booking, Leg, Route, Hop, Binding, Assembler, Coupler, Oracle++, agenda, multi-sink, ExpandKey, frontier, transparent, liveData, NeighborRank.
 
 **Bridge (old → new):** Class/Car → StationType/Station · Yard → transparent StationType · Cable → Link · Port → Track · Consist (old project name) → Trackplan · consist_car_ids → bindings / route station ids · `consist_fixture_version` → `trackplan_fixture_version`.
 
@@ -587,8 +587,8 @@ Studio does not implement Coupler, but editors can document/export fixtures that
 | **Prefilter** | setup / request / liveData on candidates; no Task/context |
 | **Inspector** | tasking Task[] must be valid after SAT; seed blockers as Tasks |
 | **Oracle** | online Link graph + Station OPEN/CLOSED; rebuild on topology change only |
-| **agenda** | multi-finish targets (e.g. `1:B1:1`, `2:B1:2`) — expect route reflects peeled path |
-| **edgeCost / NeighborRank** | fill-first / transparent cost — seed uneven tasking across peers for ranking goldens |
+| **agenda** | multi-sink goals (e.g. `1:B1:1`, `2:B1:2`) — expect route reflects ExpandKey first-fit path |
+| **ExpandKey / NeighborRank** | preferInUse, non-trans, distToG, distToTerminal, NeighborRank, names — seed uneven tasking for ranking goldens; no summed edgeCost |
 | **First / last station** | first leg: no in required; last leg: out optional (terminal) |
 | **planSegments** | multi-booking timeWindow contention + priority in one fixture world |
 | **whole-booking commit** | script: SAT B1 then resolve B2 sees B1’s committed tasking |
@@ -678,7 +678,7 @@ Booking      = legs (non-transparent types only) + priority + submitTime + timeW
 Prefilter    = cheap canUse(setup, request, liveData) — no Task, no context
 Inspector    = inspect(setup, tasking+candidate, request, liveData) → full Task[] | fail
 Assembler    = outer: legs, prefilter candidates, agenda, checkpoints, sticky, commit
-Coupler      = inner: path on Stations+Tracks+Links; edgeCost + NeighborRank; Oracle h
+Coupler      = inner: multi-sink path; ExpandKey frontier; Oracle++ distToG / distToTerminal
 Oracle       = hop-count on online Links; rebuild on topology / OPEN-CLOSED, not tasking
 ```
 

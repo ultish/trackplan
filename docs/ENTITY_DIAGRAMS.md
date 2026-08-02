@@ -19,7 +19,7 @@
 | Consist (old project name) | **Trackplan** |
 | consist display / plan path | **Route** (`Hop[]`) + **bindings** |
 
-Also: **Assembler** (outer: legs, sticky, commit) · **Coupler** (inner: path + inspect on the fabric).
+Also: **Assembler** (outer: legs, sticky, commit) · **Coupler** (inner: multi-sink path + **ExpandKey frontier** + inspect on the fabric).
 
 ---
 
@@ -49,8 +49,6 @@ classDiagram
   class Heuristics {
     +bool checkpoint
     +bool fillFirst
-    +Number? transparentCost
-    +string? edgeCostId
     +string? neighborRankId
   }
 
@@ -93,7 +91,7 @@ classDiagram
 
   note for StationType "transparent=true ⇒ omitted from Booking demand legs;\npath filler only (e.g. switch). No Yard entity."
   note for Station "setup = setupSchema values (humans).\ntasking = Task[] assignment truth.\nliveData = metrics, not setup/request."
-  note for Heuristics "fillFirst default true.\nedgeCostId / neighborRankId optional plugins (§3.7b)."
+  note for Heuristics "fillFirst default true (ExpandKey preferInUse).\nneighborRankId optional SmartNode (ExpandKey component 4).\nNo edgeCostId / summed preference ladder."
 ```
 
 ### How to read this
@@ -340,9 +338,9 @@ flowchart LR
 
 ---
 
-## 5. Engine plugins (Prefilter, Inspector, edgeCost, NeighborRank)
+## 5. Engine plugins (Prefilter, Inspector, NeighborRank / ExpandKey)
 
-Plugins attach by id on **StationType**. Prefilter is optional; Inspector is required. Coupler ranking uses **edgeCost** then optional **NeighborRank** (SmartNode).
+Plugins attach by id on **StationType**. Prefilter is optional; Inspector is required. Coupler ranking uses **ExpandKey** lexicographic order (BUILD_SPEC §3.7b); **NeighborRank** is ExpandKey component 4 (SmartNode).
 
 ```mermaid
 classDiagram
@@ -357,8 +355,6 @@ classDiagram
   class Heuristics {
     +bool checkpoint
     +bool fillFirst
-    +Number? transparentCost
-    +string? edgeCostId
     +string? neighborRankId
   }
 
@@ -372,11 +368,6 @@ classDiagram
     +inspect setup tasking request liveData
   }
 
-  class EdgeCost {
-    <<optional plugin>>
-    +edgeCost dynamic pure Number
-  }
-
   class NeighborRank {
     <<SmartNode optional>>
     +neighborRank Long higher sooner
@@ -385,13 +376,12 @@ classDiagram
   StationType --> Prefilter : prefilterId
   StationType --> Inspector : inspectorId
   StationType *-- Heuristics
-  Heuristics ..> EdgeCost : edgeCostId
   Heuristics ..> NeighborRank : neighborRankId
 
   note for Prefilter "NO Task, NO path context.\nCheap screen only.\nTransparent: no prefilter mid-path.\nrequest null ⇒ generally no request-based filter."
-  note for Inspector "One candidate Task appended per call.\nReturns FULL Task[] replacement.\nHard illegality lives here, not huge edgeCost."
-  note for NeighborRank "Tie-break only when edgeCost equal.\nHigher rank = try sooner. Default 0."
-  note for EdgeCost "Dynamic, pure, deterministic.\nhopBaseline + transparentPenalty + emptyStationPenalty + …\nLater preference terms OPEN."
+  note for Inspector "One candidate Task appended per call.\nReturns FULL Task[] replacement.\nHard illegality lives here, not ExpandKey."
+  note for NeighborRank "ExpandKey component 4 (after in-use, non-trans, distToG, distToTerminal).\nHigher rank = try sooner. Default 0."
+  note for Heuristics "ExpandKey lex only — no edgeCostId / summed ladder.\nfillFirst → preferInUse; transparent via preferNonTransparent."
 ```
 
 **Call shape (inputs only):**
@@ -400,15 +390,15 @@ classDiagram
 |--------|--------|----------------|
 | Prefilter | setup, request, liveData | Task, context, path |
 | Inspector | setup, tasking+candidate, request, liveData | Assembler time windows |
-| edgeCost | link, stations, to tasking/setup/liveData, candidate, … | Hard fail (use Inspector) |
-| NeighborRank | neighbor tasking/setup/liveData, candidate | Override cheaper edgeCost |
+| ExpandKey | fill-first, non-trans, distToG, distToTerminal, NeighborRank, names | Hard fail (use Inspector) |
+| NeighborRank | neighbor tasking/setup/liveData, candidate | ExpandKey component 4 only |
 
 ### How to read this
 
-- Assembler runs **Prefilter** to build the candidate pool for a leg; Coupler **inspects** when a target is peeled.
-- Ranking sort: **`edgeCost` → `-neighborRank` (if any) → track name / stable leftovers**.
-- A* `h` is hop-count Oracle (not a StationType plugin); dynamic preference stays in **`g`** / NeighborRank.
-- Preference terms beyond hop / transparent / fill-first are **OPEN** for later extension.
+- Assembler runs **Prefilter** to build the multi-sink goal pool; Coupler **inspects** at goals (and every transparent visit) **inside one multi-sink frontier** — not “when a target is peeled.”
+- Ranking: **ExpandKey** lex order (§3.7b) — not summed edgeCost / not `f=g+h`.
+- Frontier pop is ExpandKey-dominated (`(g, ExpandKey…)`); Oracle++ distances live **inside** ExpandKey (components 2–3), not as a competing frontier `h` / `f=g+h`.
+- New ExpandKey columns only by product decision (order changes paths).
 
 ---
 
@@ -502,7 +492,7 @@ flowchart TB
 
 ## 7. Assembler ↔ Coupler collaboration
 
-Outer Assembler owns legs, prefilter, **Oracle++** goal construction, checkpoints, sticky, and commit. Inner Coupler owns **multi-sink** fabric search + inspect at goal (**DECIDED Option A** — BUILD_SPEC §3.9d C2). Pivot history: [COUPLER_OPTION_A_VS_B.md](./COUPLER_OPTION_A_VS_B.md).
+Outer Assembler owns legs, prefilter, **Oracle++** goal construction, checkpoints, sticky, and commit. Inner Coupler owns **multi-sink ExpandKey frontier** + inspect at goal (**DECIDED Option A** — BUILD_SPEC §3.9d C2 / §3.7b). Pivot history: [COUPLER_OPTION_A_VS_B.md](./COUPLER_OPTION_A_VS_B.md).
 
 ```mermaid
 sequenceDiagram
@@ -523,10 +513,10 @@ sequenceDiagram
       Asm->>Pref: canUse setup, request, liveData
       Pref-->>Asm: candidate pool C
       Asm->>Oracle: filter sinks (next type + chain + terminal)
-      Asm->>Asm: agenda = sort targets edgeCost, rank, track
+      Asm->>Asm: agenda = sortByExpandKey(goals)
       Asm->>Cpl: couple tail or S0, goals=agenda, working, request
-      loop multi-sink open set until first-fit or exhaust
-        Cpl->>Cpl: expand Links + legalPairs
+      loop multi-sink ExpandKey frontier until first-fit or exhaust
+        Cpl->>Cpl: expand Links + legalPairs ordered by ExpandKey
         Cpl->>Insp: inspect setup, tasking+candidate, request, liveData
         alt inspect OK
           Insp-->>Cpl: full Task[]
@@ -535,7 +525,7 @@ sequenceDiagram
           Note over Asm: checkpoint previous type only after this leg succeeds
         else inspect fail
           Insp-->>Cpl: Failure
-          Note over Cpl: continue same open set — do NOT return to Assembler
+          Note over Cpl: continue same frontier — do NOT return to Assembler
         end
       end
       alt couple returned null
@@ -566,8 +556,8 @@ flowchart LR
   subgraph Coupler
     C1[Virtual S0 first leg]
     C2[Multi-sink path on Links]
-    C3[edgeCost + NeighborRank]
-    C4[Inspect at goal in open set]
+    C3[ExpandKey frontier]
+    C4[Inspect at goal in frontier]
     C5[Candidate Task in/out/context]
   end
   Assembler -->|"one multi-sink couple() per segment attempt"| Coupler

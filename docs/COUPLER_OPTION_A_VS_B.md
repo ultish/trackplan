@@ -1,10 +1,11 @@
 # Coupler control flow: Option A vs Option B
 
 **Status:** Design record for pivot / revisit — **not** the implementer day-1 contract.  
-**Current product choice:** **Option A (multi-sink)** — see [BUILD_SPEC.md](./BUILD_SPEC.md) §3.9d C2, §8.  
+**Current product choice:** **Option A (multi-sink + ExpandKey frontier)** — see [BUILD_SPEC.md](./BUILD_SPEC.md) §3.9d C2, §3.7b, §8.  
+ 
 **Audience:** Future you, another session, or a reviewer who wants the full debate without replaying chat.
 
-**Vocabulary:** StationType · Station · Track · Link · tail (bound out-track) · Prefilter · Inspector · Assembler · Coupler · Oracle++ · agenda / goals · transparent.
+**Vocabulary:** StationType · Station · Track · Link · tail (bound out-track) · Prefilter · Inspector · Assembler · Coupler · Oracle++ · ExpandKey · frontier · agenda / goals · transparent.
 
 ---
 
@@ -28,33 +29,37 @@ Both options build a sorted list of candidate finishes (**agenda / goals**) afte
 
 ---
 
-## 2. Option A — multi-sink (DECIDED v1)
+## 2. Option A — multi-sink + ExpandKey frontier (DECIDED v1)
 
 ```text
-goals = sort(Oracle++ filter(prefilter pool of type T))
+goals = sortByExpandKey(Oracle++ filter(prefilter pool of type T))
 result = Coupler.couple(tail, goals=goals, …)   // ONE call per segment attempt
-// Inside Coupler: one open set; many sinks
-//   path fail / inspect fail at a goal → continue search
+// Inside Coupler: one ExpandKey frontier; many sinks
+//   pop = (g, ExpandKey…) — ExpandKey-dominated (not f=g+h preference ranking)
+//   path fail / inspect fail at a goal → stay in frontier
 //   first inspect-OK goal → return (first-fit)
 // Assembler re-calls Coupler for next leg or inter-leg backtrack to last Checkpoint
+// ExpandKey: preferInUse, preferNonTransparent, distToSegmentGoals, distToTerminal,
+//            neighborRank, stationName, portName  (BUILD_SPEC §3.7b)
 ```
 
 | | |
 |--|--|
-| Within-leg inspect/path retries | **Inside Coupler** |
+| Within-leg inspect/path retries | **Inside Coupler frontier** |
 | Assembler role for this leg | Build goals, call once, apply result, keep unused goals as alts |
-| Classic name | Multi-sink / multi-goal search |
+| Ranking | **ExpandKey** lex only — no summed edgeCost / no peel |
+| Classic name | Multi-sink search with ExpandKey frontier |
 
 ### Pros
 
 - Shared fabric from a fixed tail is explored **once** (no re-prime per Station).  
 - Matches “segment = one search” mental model.  
-- Path diversity to the **same** Station (short fail, long via transparent OK) stays in one open set.  
-- Aligns with performance note: not one A\* per Station.
+- Path diversity to the **same** Station (short fail, long via transparent OK) stays in one frontier.  
+- Aligns with performance note: not one A\* per Station (Option B peel).
 
 ### Cons
 
-- Coupler core is harder to read (multi-goal A\*, continue-on-inspect-fail).  
+- Coupler core is harder to read (multi-goal frontier, continue-on-inspect-fail).  
 - Careful closed-set rules so one bad arrival at N1 does not block another path to N1.  
 - Slightly richer debug (log failed goal samples inside Coupler).
 
@@ -104,7 +109,7 @@ Links from R1:1:
   R1:1 → 1:N1
   R1:1 → 1:N2
   R1:1 → 1:N3
-Sort: N1, N2, N3 (equal cost → name)
+Sort: ExpandKey lex (e.g. N1, N2, N3 when distances/ranks tie → name)
 Oracle++ (see BUILD_SPEC): may drop sinks that cannot reach terminal X
   e.g. N1 cannot reach any X → drop N1 if Oracle++ enabled for terminal
 Assume for a moment Oracle++ only filters “reach some N” (weak): goals = {N1,N2,N3}
@@ -122,7 +127,7 @@ Assume for a moment Oracle++ only filters “reach some N” (weak): goals = {N1
 
 | | Option A | Option B |
 |--|----------|----------|
-| Behavior | Same open set continues → reach N2 → inspect OK | Return to Assembler → `tryTarget(N2)` |
+| Behavior | Same ExpandKey frontier continues → reach N2 → inspect OK | Return to Assembler → `tryTarget(N2)` |
 | Efficiency | Shared expansions from R1:1 | Second search from R1:1 |
 
 ### N1 inspect OK, but N1 cannot reach X
@@ -156,13 +161,13 @@ Recorded lean (product session):
 
 1. Production graphs are deep fabric + many candidates — re-priming per Station hurts.  
 2. Inspect/path failures at goals are normal; they should not round-trip Assembler every time.  
-3. Assembler stays “legs + world + sticky”; Coupler stays “from this tail, any valid next bind of type T.”  
+3. Assembler stays “legs + world + sticky”; Coupler stays “from this tail, ExpandKey frontier over multi-sink goals.”  
 4. Happy path identical to B; difference is failure packing and cost.  
 5. Readability of Coupler is manageable with helpers + goldens; system-level story is clearer with one search per segment.
 
 **Pivot triggers** (when to reconsider B or a hybrid):
 
-- Coupler open-set bugs dominate delivery cost and goldens are unstable.  
+- Coupler frontier bugs dominate delivery cost and goldens are unstable.  
 - Goal sets are always size 1 in production (booking always pins Station).  
 - Profiling shows multi-sink overhead worse than peel on real topologies (unexpected).  
 - Team strongly prefers single-target A\* for onboarding and accepts Assembler loop cost.
@@ -175,7 +180,8 @@ Recorded lean (product session):
 
 | Concern | Option A | Option B |
 |---------|----------|----------|
-| Public API | `couple(tail, goals: Set<Finish>)` | `tryTarget(tail, finish)` + Assembler loop |
+| Public API | `couple(tail, goals: Set<Finish>)` + ExpandKey frontier | `tryTarget(tail, finish)` + Assembler peel loop |
+| Ranking | ExpandKey lex only (no summed edgeCost / f=g+h) | Single-sink A\* per peel (pivot shape) |
 | Goldens | G: N1 inspect fail → same resolve binds N2 without two segment metrics spikes | G: two couple invocations |
 | Metrics | `expansions` per segment | Sum expansions across peels; count peels |
 | FailureReport samples | Failed goal arrivals inside one call | Per-tryTarget samples |

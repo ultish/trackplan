@@ -1,0 +1,78 @@
+######## SCENARIO simple: R→N→D (stamp world) ########
+=== couple: S0→Refrigerated ===
+goals=['R-17', 'R-22'] offline_links=0
+S0 expand order (ExpandKey):
+  S0 → R-17  key=(0, -1, 3, 0, 'R-17', '1')
+  S0 → R-22  key=(0, -1, 1000000000, 0, 'R-22', '1')
+[1] GOAL? R-17 hops=[] ctx=[] → Refrigerated inspect OK
+SUCCESS path=[] station=R-17 ctx=['cabinets=4']
+expansions=1
+=== couple: R-17:out1→Normal goals {N-04,N-12} ===
+goals=['N-04', 'N-12'] offline_links=0
+start tail=R-17 out=1 ctx=cabinets=4
+[1] EXPAND R-17 in=tail ctx=['cabinets=4'] children (ExpandKey order):
+    → 1:R-17:1 Link→ Y1:1  [transparent]  key=(0, 0, 2, 0, 'Y1', '1')
+[2] TRANSPARENT Y1 in=1 Y1 transparent inspect OK ctx→['cabinets=4']
+[2] EXPAND Y1 in=1 ctx=['cabinets=4'] children (ExpandKey order):
+    → 1:Y1:1 Link→ N-04:1  [goal]  key=(0, -1, 1, 0, 'N-04', '1')
+    → 1:Y1:3 Link→ N-08:1  [not-goal]  key=(0, -1, 1000000000, 0, 'N-08', '3')
+    → 1:Y1:2 Link→ Y2:1  [transparent]  key=(0, 0, 2, 0, 'Y2', '2')
+[3] GOAL? N-04 hops=['1:R-17:1', '1:Y1:1'] ctx=['cabinets=4'] → INSPECT_FAIL missing clearance.y2_stamp
+[4] NOT_GOAL N-08 hops=['1:R-17:1', '1:Y1:3'] ctx=['cabinets=4'] → not a multi-sink goal (e.g. prefilter seats)
+[5] TRANSPARENT Y2 in=1 Y2 inspect OK · wrote clearance.y2_stamp ctx→['cabinets=4', 'clearance.y2_stamp']
+[5] EXPAND Y2 in=1 ctx=['cabinets=4', 'clearance.y2_stamp'] children (ExpandKey order):
+    → 1:Y2:5 Link→ N-04:1  [goal]  key=(0, -1, 1, 0, 'N-04', '5')
+    → 1:Y2:6 Link→ Y1:5  [transparent]  key=(0, 0, 2, 0, 'Y1', '6')
+[6] GOAL? N-04 hops=['1:R-17:1', '1:Y1:2', '1:Y2:5'] ctx=['cabinets=4', 'clearance.y2_stamp'] → Normal inspect OK · stamp+seats
+SUCCESS path=['1:R-17:1', '1:Y1:2', '1:Y2:5'] station=N-04 ctx=['cabinets=4', 'clearance.y2_stamp', 'seats=8']
+expansions=6
+=== couple: N-04:out1→Docking ===
+goals=['D-02', 'D-11'] offline_links=0
+start tail=N-04 out=1 ctx=cabinets=4
+[1] EXPAND N-04 in=tail ctx=['cabinets=4'] children (ExpandKey order):
+    → 1:N-04:1 Link→ D-02:1  [goal]  key=(0, -1, 0, 0, 'D-02', '1')
+[2] GOAL? D-02 hops=['1:N-04:1'] ctx=['cabinets=4'] → Docking inspect OK
+SUCCESS path=['1:N-04:1'] station=D-02 ctx=['cabinets=4']
+expansions=2
+######## SCENARIO multiyard (N segment only) ########
+=== couple: R→N multiyard ===
+goals=['N-04', 'N-12'] offline_links=0
+start tail=R-17 out=1 ctx=cabinets=4
+[1] EXPAND R-17 in=tail ctx=['cabinets=4'] children (ExpandKey order):
+    → 1:R-17:1 Link→ Y1:1  [transparent]  key=(0, 0, 2, 0, 'Y1', '1')
+[2] TRANSPARENT Y1 in=1 Y1 transparent inspect OK ctx→['cabinets=4']
+[2] EXPAND Y1 in=1 ctx=['cabinets=4'] children (ExpandKey order):
+    → 1:Y1:1 Link→ N-04:1  [goal]  key=(0, -1, 1, 0, 'N-04', '1')
+    → 1:Y1:3 Link→ N-08:1  [not-goal]  key=(0, -1, 1000000000, 0, 'N-08', '3')
+    → 1:Y1:2 Link→ Y2:1  [transparent]  key=(0, 0, 2, 0, 'Y2', '2')
+[3] GOAL? N-04 hops=['1:R-17:1', '1:Y1:1'] ctx=['cabinets=4'] → INSPECT_FAIL missing clearance.y2_stamp
+[4] NOT_GOAL N-08 hops=['1:R-17:1', '1:Y1:3'] ctx=['cabinets=4'] → not a multi-sink goal (e.g. prefilter seats)
+[5] TRANSPARENT Y2 in=1 Y2 inspect OK · wrote clearance.y2_stamp ctx→['cabinets=4', 'clearance.y2_stamp']
+[5] EXPAND Y2 in=1 ctx=['cabinets=4', 'clearance.y2_stamp'] children (ExpandKey order):
+    → 1:Y2:5 Link→ N-04:1  [goal]  key=(0, -1, 1, 0, 'N-04', '5')
+    → 1:Y2:6 Link→ Y1:5  [transparent]  key=(0, 0, 2, 0, 'Y1', '6')
+[6] GOAL? N-04 hops=['1:R-17:1', '1:Y1:2', '1:Y2:5'] ctx=['cabinets=4', 'clearance.y2_stamp'] → Normal inspect OK · stamp+seats
+SUCCESS path=['1:R-17:1', '1:Y1:2', '1:Y2:5'] station=N-04 ctx=['cabinets=4', 'clearance.y2_stamp', 'seats=8']
+expansions=6
+######## SCENARIO loopback: Y2→N-04 offline ########
+=== couple: R→N with Y2:5→N-04 OFFLINE ===
+goals=['N-04', 'N-12'] offline_links=1
+start tail=R-17 out=1 ctx=cabinets=4
+[1] EXPAND R-17 in=tail ctx=['cabinets=4'] children (ExpandKey order):
+    → 1:R-17:1 Link→ Y1:1  [transparent]  key=(0, 0, 2, 0, 'Y1', '1')
+[2] TRANSPARENT Y1 in=1 Y1 transparent inspect OK ctx→['cabinets=4']
+[2] EXPAND Y1 in=1 ctx=['cabinets=4'] children (ExpandKey order):
+    → 1:Y1:1 Link→ N-04:1  [goal]  key=(0, -1, 1, 0, 'N-04', '1')
+    → 1:Y1:3 Link→ N-08:1  [not-goal]  key=(0, -1, 1000000000, 0, 'N-08', '3')
+    → 1:Y1:2 Link→ Y2:1  [transparent]  key=(0, 0, 3, 0, 'Y2', '2')
+[3] GOAL? N-04 hops=['1:R-17:1', '1:Y1:1'] ctx=['cabinets=4'] → INSPECT_FAIL missing clearance.y2_stamp
+[4] NOT_GOAL N-08 hops=['1:R-17:1', '1:Y1:3'] ctx=['cabinets=4'] → not a multi-sink goal (e.g. prefilter seats)
+[5] TRANSPARENT Y2 in=1 Y2 inspect OK · wrote clearance.y2_stamp ctx→['cabinets=4', 'clearance.y2_stamp']
+[5] EXPAND Y2 in=1 ctx=['cabinets=4', 'clearance.y2_stamp'] children (ExpandKey order):
+    → 1:Y2:6 Link→ Y1:5  [transparent]  key=(0, 0, 2, 0, 'Y1', '6')
+[6] TRANSPARENT Y1 in=5 Y1 transparent inspect OK ctx→['cabinets=4', 'clearance.y2_stamp']
+[6] EXPAND Y1 in=5 ctx=['cabinets=4', 'clearance.y2_stamp'] children (ExpandKey order):
+    → 5:Y1:6 Link→ N-12:1  [goal]  key=(0, -1, 1, 0, 'N-12', '6')
+[7] GOAL? N-12 hops=['1:R-17:1', '1:Y1:2', '1:Y2:6', '5:Y1:6'] ctx=['cabinets=4', 'clearance.y2_stamp'] → Normal inspect OK · stamp+seats
+SUCCESS path=['1:R-17:1', '1:Y1:2', '1:Y2:6', '5:Y1:6'] station=N-12 ctx=['cabinets=4', 'clearance.y2_stamp', 'seats=12']
+expansions=7

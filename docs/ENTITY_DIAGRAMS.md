@@ -177,7 +177,7 @@ flowchart LR
 - A **Link** always runs **from OUT → to IN** (never the reverse as a single Link).
 - Track identity is a string **TrackId** scoped by station + side; type lists all possible tracks.
 - `Link.online = false` or `Station.online = false` (CLOSED) removes that edge/node from Coupler search.
-- Topology (Links / online) feeds the **Oracle** hop graph; tasking does **not** rebuild Oracle.
+- Topology (Links / online) feeds **Oracle++** (next type, non-transparent chain, terminal, hop `h`); tasking does **not** rebuild Oracle++.
 
 ---
 
@@ -502,14 +502,14 @@ flowchart TB
 
 ## 7. Assembler ↔ Coupler collaboration
 
-Outer Assembler owns legs, prefilter, agenda, checkpoints, sticky, and commit. Inner Coupler owns fabric path search and inspect-when-peeled.
+Outer Assembler owns legs, prefilter, **Oracle++** goal construction, checkpoints, sticky, and commit. Inner Coupler owns **multi-sink** fabric search + inspect at goal (**DECIDED Option A** — BUILD_SPEC §3.9d C2). Pivot history: [COUPLER_OPTION_A_VS_B.md](./COUPLER_OPTION_A_VS_B.md).
 
 ```mermaid
 sequenceDiagram
   participant Sticky as Sticky cache
   participant Asm as Assembler
   participant Pref as Prefilter
-  participant Oracle as Oracle hop graph
+  participant Oracle as Oracle++
   participant Cpl as Coupler
   participant Insp as Inspector
   participant World as CommittedWorld
@@ -522,23 +522,24 @@ sequenceDiagram
     loop each demand leg non-transparent
       Asm->>Pref: canUse setup, request, liveData
       Pref-->>Asm: candidate pool C
-      Asm->>Oracle: filter finishes / multi-sink goals
+      Asm->>Oracle: filter sinks (next type + chain + terminal)
       Asm->>Asm: agenda = sort targets edgeCost, rank, track
-      loop peel agenda until segment OK
-        Asm->>Cpl: tryTarget tail or S0, target, working, request
-        Cpl->>Cpl: A* path on online Links
+      Asm->>Cpl: couple tail or S0, goals=agenda, working, request
+      loop multi-sink open set until first-fit or exhaust
+        Cpl->>Cpl: expand Links + legalPairs
         Cpl->>Insp: inspect setup, tasking+candidate, request, liveData
         alt inspect OK
           Insp-->>Cpl: full Task[]
-          Cpl-->>Asm: path + Task[]; update overlay / route / bindings
+          Cpl-->>Asm: path + Task[] + target; stop this segment
+          Note over Asm: remaining agenda → alts for later-leg fail only
           Note over Asm: checkpoint previous type only after this leg succeeds
-        else inspect/path fail
+        else inspect fail
           Insp-->>Cpl: Failure
-          Cpl-->>Asm: try next agenda target
+          Note over Cpl: continue same open set — do NOT return to Assembler
         end
       end
-      alt no target worked
-        Asm->>Asm: discard WorkingState; UNSAT
+      alt couple returned null
+        Asm->>Asm: optional inter-leg backtrack with prior alts else discard; UNSAT
       end
     end
     alt all legs OK
@@ -557,20 +558,20 @@ flowchart LR
   subgraph Assembler
     A1[Legs + queue priority]
     A2[Prefilter pool]
-    A3[Agenda / alts]
+    A3[Agenda goals + inter-leg alts]
     A4[Checkpoint types]
     A5[Sticky + whole-booking commit]
     A6[Time events / planSegments]
   end
   subgraph Coupler
     C1[Virtual S0 first leg]
-    C2[Path on Links]
+    C2[Multi-sink path on Links]
     C3[edgeCost + NeighborRank]
-    C4[Inspect when peeled]
+    C4[Inspect at goal in open set]
     C5[Candidate Task in/out/context]
   end
-  Assembler -->|"one segment per leg"| Coupler
-  Coupler -->|"path + inspect-OK Task[]"| Assembler
+  Assembler -->|"one multi-sink couple() per segment attempt"| Coupler
+  Coupler -->|"path + inspect-OK Task[] (first-fit)"| Assembler
 ```
 
 ### How to read this
@@ -578,7 +579,8 @@ flowchart LR
 - **First leg** still uses Coupler: virtual source **S0 → candidates** (no Link into entry stations; inputs unused on first type).
 - **Last / terminal** leg: success on arrival (input set, output often null); outs optional once last type is tasked.
 - Assembler does **not** expand every track; Coupler does **not** own multi-booking queue or sticky.
-- Wrong pattern (removed): first leg = Inspector-only bind with no Coupler.
+- Wrong (DECIDED void): first leg = Inspector-only bind with no Coupler; Option B peel as v1 contract.
+- **DECIDED:** multi-sink `couple(goals=…)` (Option A). Oracle++ drops sinks that cannot reach terminal / later non-transparent types.
 
 ---
 

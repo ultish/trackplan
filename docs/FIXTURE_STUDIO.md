@@ -4,7 +4,7 @@
 **Audience:** humans and agents who will build test tooling after (or alongside) the domain engine  
 **Related:** [BUILD_SPEC.md](./BUILD_SPEC.md) (canonical model §1–§3, goldens G1–G12), [SPEC.md](./SPEC.md), [booking-assembler-design.html](./booking-assembler-design.html) (narrative walkthroughs)
 
-**Canonical vocabulary:** StationType, Station, Track, Link, Setup, Tasking, Task, Request, Prefilter, Inspector, Booking, Leg, Route, Hop, Binding, Assembler, Coupler, Oracle, agenda, transparent, liveData, edgeCost, NeighborRank.
+**Canonical vocabulary:** StationType, Station, Track, Link, Setup, Tasking, Task, Request, Prefilter, Inspector, Booking, Leg, Route, Hop, Binding, Assembler, Coupler, Oracle++, agenda, multi-sink, transparent, liveData, edgeCost, NeighborRank.
 
 **Bridge (old → new):** Class/Car → StationType/Station · Yard → transparent StationType · Cable → Link · Port → Track · Consist (old project name) → Trackplan · consist_car_ids → bindings / route station ids · `consist_fixture_version` → `trackplan_fixture_version`.
 

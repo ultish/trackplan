@@ -16,10 +16,10 @@
 | Status tag | Meaning |
 |------------|---------|
 | **DECIDED v1** | Implement exactly this unless product overrides |
-| **DEFAULT v1** | Recommended; safe to ship; note if you change it |
-| **OPEN** | Needs product input; do not invent beyond listed options |
+| **DEFAULT v1** | Recommended; safe to ship; note if you change it — **only** when product/session explicitly chose it |
+| **OPEN** | Needs product input; **do not invent** a mechanism, API, or “obvious” default |
 
-When something is **OPEN**, the **DEFAULT** is still specified so build can proceed.
+**Rule for authors/agents:** if two sections conflict, or a behavior is not written, mark **OPEN** and **ask** — do **not** silently pick one side and relabel it DECIDED.
 
 ### Document authority (DECIDED)
 
@@ -48,21 +48,18 @@ When something is **OPEN**, the **DEFAULT** is still specified so build can proc
 
 ---
 
-## 2. Non-goals (v1)
+## 2. Scope: what is in, out, and deferred
 
-**DECIDED v1 — do not build (in the engine slice):**
+### 2.0 Sole deferred product feature (**not** building yet)
 
-- Global optimal multi-Booking packing / MILP / CP-SAT as primary solver  
-- Full UI  
-- Parallel “assign all legs then join”  
-- Device-level graph without tracks  
-- “Never visit same Station twice” as a hard rule (re-entry on a new hop_key is allowed)  
-- Re-solving every poll when nothing hopeful changed  
-- Perfect dependency-based cache invalidation (use hopeful-token set first)  
-- **Kafka producers/consumers, topic schema registry wiring** (adapters after domain works; SPEC §10.1)  
-- **Force-priority preemption** (kick lower Bookings) — design only in SPEC §12 Q16; v1 resolve uses free resources only
+| Deferred | Meaning |
+|----------|---------|
+| **Force-priority preemption** (`forcePriority` / kick) | A higher-priority Booking **forcibly takes** resources already held by lower-priority Bookings (eviction cascade, audit). Strawman only: **SPEC.md §12 Q16**. |
 
-### 2.1 Booking priority (data only in v1)
+Everything else that is **DECIDED** in this document is **in scope for v1** — not “optional,” not “P6 if needed,” not “maybe later.”  
+Implementation **order** (phases P0–P5, domain goldens before Kafka adapters) is sequencing, not optionality.
+
+### 2.1 Booking priority (**in v1**)
 
 ```text
 Booking {
@@ -71,16 +68,34 @@ Booking {
 }
 ```
 
-| Resolve mode | v1 behavior |
-|--------------|-------------|
-| Normal | Place in priority order (1 first); free capacity only within a time-slice view |
-| `forcePriority: true` | **OPEN / not v1** — kick lower-priority bookings to free resources (SPEC Q16); distinct from “steal at a later event when both scheduled” |
+| Behavior | v1? |
+|----------|-----|
+| Place queue: priority 1 first, then FCFS **submitTime** | **Yes** |
+| Free capacity only when placing (no free resource → fail / backtrack / CAPACITY) | **Yes** |
+| Same-run **plan re-place**: higher-priority booking **SAT-commits** and takes a resource; lower-priority booking is **re-resolved in the same engine run** for affected slices | **Yes** (§3.9b) — scheduling repair, not force-kick |
+| **`forcePriority: true`** — kick already-held lower-priority claims without a clean free-resource place | **No — sole deferred (Q16)** |
 
-**Note:** Mid-window **re-place** of a lower-priority booking after a higher-priority one **commits** in the same run is in-scope (Assembler queue). That is not the same as force-kick of an already-live exclusive hold without a full re-plan pass.
+### 2.2 Non-goals (wrong approach — not “later phases”)
 
-Do **not** silently overwrite another Booking’s claims in v1.
+Do **not** build these as the engine design (they are incorrect or out of product shape, not deferred features):
 
-Full design strawman (eviction, cascade, audit): **SPEC.md §12 Q16**.
+- Global optimal multi-Booking packing / MILP / CP-SAT as primary solver (first-fit multi-sink + priority queue instead)  
+- Parallel “assign all legs then join” (Context requires ordered legs)  
+- Device-level graph without tracks  
+- “Never visit same Station twice” as a hard rule (re-entry on a new hop_key is allowed)  
+- Re-solving every poll when nothing hopeful changed (sticky / bust tables)  
+- Soft multi-Booking **combine/share** on aggregator ports (**exclusive** is the product rule, not a v2 roadmap item)  
+- Assembler peel / Option B Coupler (rejected; pivot doc only)  
+- Full production ops UI as part of the engine library (Fixture Studio is separate tooling when built)
+
+### 2.3 Sequencing (required, ordered — not optional)
+
+| Order | Work |
+|-------|------|
+| 1 | Domain engine + goldens G1–G12 (P0–P5 below) |
+| 2 | Kafka adapters / topics (same product; after domain is green — SPEC §10.1) |
+
+Do **not** treat Kafka, Oracle++, backtrack, sticky, or FailureReport samples as optional extras.
 
 ---
 
@@ -267,7 +282,7 @@ Demand leg 1 = StationType T. **No transparent types before T.** First type is *
    - No Link into an in-track required.  
    - Cost S0→c uses edgeCost/neighborRank (fill-first, etc.) on c’s tasking.  
 3. Goal: **inspect** accepts a **start Task** on some c (out-track chosen for the *next* segment if any).  
-4. **`h`:** for this segment goals are the candidates themselves → `h(c)=0` at a goal; `h(S0)=0` (or min over candidates — equivalent for ranking). Later segments: `h(n)` = Oracle hop-count to nearest prefiltered goal of that leg’s type.
+4. **`h`:** for this segment goals are the candidates themselves → `h(c)=0` at a goal; `h(S0)=0` (or min over candidates — equivalent for ranking). Later segments: `h(n)` = Oracle++ hop-count to nearest prefiltered goal of that leg’s type.
 
 #### Last leg / terminal (DECIDED)
 
@@ -278,108 +293,115 @@ Last StationType is often a **terminal**: typically **no output track** needed.
 - Candidate Task for terminal: **input** set, **output** empty/null (or type-defined sentinel); inspect still validates tasking list.  
 - If a last type *does* define outs, they are optional for “booking complete”; booking is done once last type is successfully tasked on arrival.
 
-#### Oracle (DECIDED summary)
+#### Oracle++ (DECIDED — topology insight beyond “next type only”)
 
-- Graph: **Stations + Tracks + Links** (no separate “side” concept beyond in vs out track lists on the type).  
-- Physical reachability / hop `h`: topology only; **hop_key + H + V** anti-loop (loopback OK, infinite not).  
-- Rebuild when Links add/remove/online or Station OPEN/CLOSED (and type track topology changes).  
-- **Not** rebuilt on tasking. Build/rebuild before Assembler when topology dirty; read-only during run.
+**Name:** **Oracle++** (supersedes the weaker “Oracle = only hop-count to next type” story).  
+**Graph:** Stations + Tracks + Links (in vs out from type track lists). Topology only — **not** tasking, request, or Inspector.
 
-### 3.7b Coupler: dynamic edge costs + SmartNode (NeighborRank)
+**Loop rules (same as Coupler):** hop_key uniqueness on a path, max hops **H**, max visits per station **V**, online Links + OPEN Stations only. Loopback OK; infinite spin not.
 
-Coupler needs **both**:
+**Rebuild when:** Links add/remove/online, Station OPEN/CLOSED, type track / legalPairs topology changes.  
+**Not rebuilt on:** tasking, liveData, booking request changes.  
+Build/rebuild before Assembler when topology dirty; **read-only** during a resolve run.
 
-1. **Edge costs** (A* `g` / path cost) that can depend on **dynamic** world state, and  
-2. **SmartNode / NeighborRank** when expanding a Station: among legal next Stations (same type or peers), **sort deterministically** using **tasking** (and setup/liveData), not only static ids.
+##### Queries Oracle++ must support (DECIDED)
 
-These are related but not the same knob.
+Booking demand legs = ordered **non-transparent** StationTypes `T0, T1, …, Tk` with **Tk = terminal** (last leg).
 
-#### Dynamic edge cost
+| Query | Meaning | Used for |
+|-------|---------|----------|
+| **Reach type** | From a start (S0, or tail out-track / port), does **any** Station of type **T** remain reachable? | Empty pool / UNREACHABLE early out |
+| **Candidate sinks for next type** | From current tail, which Stations (finishes) of type **T_next** are reachable? | Build Coupler multi-sink **goals** |
+| **Non-transparent chain** | From a Station (or finish) of type **T_i**, can I reach **some** Station of type **T_j** (j > i), via fabric + transparent only? | Drop sinks that are dead for **later demand legs** |
+| **To terminal** | From a Station/port, can I reach **some** Station of terminal type **Tk**? | Filter dead-end sinks |
+| **Distance to terminal** | Optimistic **hop length** from port/Station → nearest terminal-type Station | ExpandKey component — prefer shorter; **not** boolean alone |
+| **Hop-count h (segment goals)** | Distance from port → nearest remaining multi-sink goal of **this** leg | A\* heuristic for current couple |
+
+**DECIDED:** Oracle++ stores **numeric distance** to terminal (and may store distance to next leg type), not only can/cannot reach. Unreachable = ∞ / filtered out of goals.
+
+**DECIDED product intent:** when building goals for leg i, filter candidates with Oracle++ so a sink is kept only if it is reachable from the **current tail** **and** (for i < k) it can still reach the **terminal** type Tk (and DEFAULT: intermediate non-transparent types T_{i+1}…T_{k-1}).
 
 ```text
-// Cost to traverse Link L into Station N using candidate Task t
-// DECIDED: may read dynamic data — not a static weight on the Link alone
-edgeCost(
-  link: Link,
-  fromStation: Station,
-  toStation: Station,          // neighbor
-  toSetup: object,
-  toTasking: Task[],           // current tasking on toStation (SOURCE OF TRUTH)
-  toLiveData: object | null,
-  candidate: Task,             // proposed use of toStation (in/out/context/…)
-  request: object | null,
-  pathSoFar: Hop[]             // optional
-) → non-negative Number
+// Goal construction for leg i (Assembler) — DECIDED shape
+pool = Prefilter(OPEN stations of type T_i)
+goals = [ s in pool
+          | Oracle++.reachable(tail → s)
+          | (i == k || Oracle++.canReachTerminal(s, Tk))
+          | (DEFAULT: Oracle++.canReachTypes(s, T_{i+1}..T_{k-1})) ]
+goals = sortByExpandKey(goals)  // lexicographic ExpandKey — §3.7b
+// then Coupler.couple(tail, goals)  // multi-sink Option A
 ```
+
+**Not Oracle++:** whether Inspector will accept (request, tasking, context stamps).
+
+**Implementation:** precompute reachability **and** distances to terminal (and segment goals) on topology change; read-only during resolve.
+
+**Legacy name:** older text saying “Oracle” means **Oracle++**.
+
+### 3.7b Neighbor expand order — **lexicographic ExpandKey (DECIDED)**
+
+**Do not** sum preference terms into one number for expand order.  
+`(1,1,2,0)` and `(0,1,3,0)` both sum to 4, but **first differing component wins**.
+
+When Coupler expands legal children (or Assembler sorts multi-sink goals), build an **ExpandKey** and compare **lexicographically**. After all components, ties are already broken by name fields.
+
+```text
+// DECIDED component order (index 0 is most significant)
+ExpandKey = (
+  preferInUse,           // 0: 1 if neighbor already in use (tasking), else 0 — PREFER HIGHER
+  preferNonTransparent,  // 1: 1 if NOT transparent, else 0 — PREFER HIGHER
+  distToTerminal,        // 2: Oracle++ hop distance to nearest Tk — PREFER LOWER
+  neighborRank,          // 3: SmartNode if type defines one, else 0 — PREFER HIGHER
+  stationName,           // 4: lexicographic — PREFER LOWER
+  portName               // 5: track id on hop — PREFER LOWER
+)
+```
+
+| # | Component | Prefer | Source |
+|---|-----------|--------|--------|
+| 0 | **In use** | Higher (fill-first) | Neighbor has tasking / “already used”; type may disable fill-first → always 0 |
+| 1 | **Non-transparent** | Higher | `!stationType.transparent` — prefer demand types over pure path fillers |
+| 2 | **Distance to terminal** | Lower | **Oracle++** numeric length to nearest terminal Station (not bool) |
+| 3 | **NeighborRank (SmartNode)** | Higher | Type plugin; default 0 |
+| 4 | **Station name/id** | Lower | Stable id |
+| 5 | **Port/track name** | Lower | TrackId |
 
 **DECIDED:**
 
-- Costs are **dynamic** and **composable**: a sum (or ordered mix) of preference terms; new terms can be added later without changing Coupler structure.  
-- Must be **pure + deterministic** given WorldSnapshot + candidate (no RNG, no map-iteration order).  
-- Static baseline allowed (e.g. +1 per hop) **plus** dynamic terms.  
-- **Hard illegality is not a huge cost** — illegal uses fail **Inspector**; cost only ranks *legal* preferences.  
-- A* `f = g + h`: `g` sums `edgeCost` along the path; `h` may stay optimistic (ignore occupancy) — v1 ACCEPTABLE that A* is not optimal on the full dynamic metric.
+- **Tuple order**, not sum.  
+- **Pure + deterministic** given WorldSnapshot + candidate.  
+- Hard illegality is not a key — **Inspector** rejects; expand only ranks legal edges.  
+- **Prefilter** is earlier (Assembler); not an ExpandKey component.  
+- New columns only by product decision (order changes paths).
 
-**Known preference terms (v1 examples — extend over time):**
+#### Relation to A* `g` / `h`
 
-| Preference | Intent | Typical cost effect |
-|------------|--------|---------------------|
-| **Prefer non-transparent** | Progress demand legs / endpoints over lingering in pure path fillers | Higher cost entering **transparent** stations than non-transparent (or bonus for non-transparent) |
-| **Prefer non-transparent** | Progress demand types | Transparent penalty — **default** e.g. +1; **StationType override** if that type is “more expensive” |
-| **Prefer already-tasked (fill first)** | Pack load before empty peers | Empty-station penalty — **configurable per StationType** (default ON for all types) |
-| **Baseline hop** | Every step costs something | +1 per Link |
-| **Later terms** | OPEN | liveData headroom, merge-friendly tasking, … |
+| Idea | Role |
+|------|------|
+| **ExpandKey** | Orders which neighbor to try next (and agenda goal order) |
+| **`g`** | **DEFAULT:** +1 per Link hop (search accounting) |
+| **`h`** | Oracle++ distance to nearest **segment multi-sink goal** |
+
+ExpandKey already encodes fill-first / transparent / terminal distance for **branch preference**. Do not double-count those as a summed scalar for expand order.
+
+#### NeighborRank = SmartNode
 
 ```text
-edgeCost = hopBaseline
-         + transparentPenalty(type)       // default 1 if transparent; override on StationType
-         + emptyStationPenalty(tasking) // if type.heuristics.fillFirst (default true)
-         + … future terms …
+neighborRank(neighbor.tasking, setup, liveData, candidate, request?) → Long
+// higher = try sooner among peers already tied on components 0–2
+// Default 0; not every StationType has a plugin
 ```
 
-#### NeighborRank = SmartNode (name)
-
-**NeighborRank** is the doc name for **SmartNode**: when expanding, order legal neighbors deterministically using **tasking** (etc.), not only `stationId`.
+#### A* heuristic `h` (segment goals)
 
 ```text
-neighborRank(neighbor.tasking, setup, liveData, candidate, request?) → Long  // higher = try sooner
-// Default 0; type plugin can mirror fill-first / reuse scoring
-```
-
-**DECIDED:** NeighborRank applies **only when `edgeCost` is equal** (tie-break). It does not override a cheaper edge. Not every StationType has a SmartNode.
-
-```text
-sort: (edgeCost, -neighborRank_if_any, trackName/trackId, …stable leftovers)
-// stationId is not part of edgeCost
-```
-
-| Mechanism | Effect |
-|-----------|--------|
-| **edgeCost** | Primary sort / A* `g` |
-| **neighborRank (SmartNode)** | Only if type defines one **and** edgeCost equal |
-| **track name** | Last-resort deterministic tie-break |
-
-#### A* heuristic `h` (hop count to goal)
-
-`f = g + h`. **`g`** = sum of dynamic edgeCosts so far. **`h`** = estimate of remaining cost to goal.
-
-**DECIDED DEFAULT v1:**
-
-- **`h` = BFS hop count** on the **online Link** graph from current station to the **nearest goal** for this Coupler segment (goal = stations of the target StationType for this leg / multi-sink set). Each Link counts as 1. **Ignores** tasking, fill-first, transparent penalties.  
-- “Optimistic” = does not add dynamic penalties into `h` (so `h` underestimates true dynamic remaining cost). Smarts stay in **`g` (edgeCost)** + **NeighborRank** ties.
-
-**Precompute (Oracle) — yes, optional but recommended:**
-
-```text
-// Rebuild when topology changes (Links add/remove, Link.online, station online)
-// Do NOT rebuild on every tasking/liveData change
-oracle.minHops[fromStationId][toStationId] = BFS distance on online Links
+// Rebuild when topology changes — not on every tasking change
+oracle.minHops[from][to] = BFS on online Links
+oracle.distToTerminal[port] = min hops to any Station of type Tk
 
 // Multi-sink goals G for this couple():
 h(n) = min over g in G of oracle.minHops[n][g]
-
-// Virtual source S0 → candidates C:
-h(S0) = min over c in C of h(c)   // or min (1 + h(c)) if S0 edges count as one hop
+// ExpandKey.distToTerminal uses oracle.distToTerminal[neighbor]
 ```
 
 Per Coupler call without Oracle: one multi-source BFS **backward from all goals** once, then O(1) `h(n)` lookups — same idea, amortized per call.
@@ -554,46 +576,87 @@ You never preload every switch in the plant. You only overlay stations **you hav
 
 Loopbacks allowed; infinite loops not. Rebuild when topology changes, not tasking.
 
-#### C2 — Agenda: next target to try (inspect when peeled)
+#### C2 — Multi-sink Coupler — **DECIDED Option A**
 
-**DECIDED:**
+**Product choice:** **Option A — multi-sink.**  
+**Pivot / debate record:** [COUPLER_OPTION_A_VS_B.md](./COUPLER_OPTION_A_VS_B.md) (Option B retained only for future pivot).
+
+| Rule | Status |
+|------|--------|
+| Within-segment: one `couple(tail, goals=agenda)` | **DECIDED A** |
+| Goals = many concrete Station finishes of next type (not StationType as a node) | **DECIDED** |
+| Path fail / inspect fail at a goal → **continue inside Coupler** | **DECIDED** |
+| First inspect-OK goal → return (first-fit) | **DECIDED** |
+| Agenda = Oracle++-filtered, sorted **targets** (finishes e.g. `1:N1`, not full multi-hop paths) | **DECIDED** |
+| Sort: edgeCost, then NeighborRank if equal & type has one, then track name | **DECIDED** |
+| Full fabric paths precomputed into agenda? | **No** (**DECIDED**) |
+| Store pathTaken for debug / FailureReport / sticky | **DECIDED** |
+| Inspect = `Inspector.inspect` → `Task[] \| Failure` | **DECIDED** |
+| First leg = virtual S0 + multi-sink Coupler | **DECIDED** |
+| Tail for next segment = bound **out-track** (not Station alone) | **DECIDED** |
+| Assembler re-calls Coupler per goal after inspect fail in same segment? | **No** |
+| Option B (Assembler peel + `tryTarget`) | **Not v1** — pivot doc only |
 
 ```text
-agenda = sort( oracleFilter( candidate finishes e.g. 1:B1:1, 2:B1:2, 1:B2:1, … ) )
-// targets only — not full multi-hop paths
-// sort: edgeCost, then NeighborRank if cost equal & type has one, then track name
-
-while agenda not empty:
-  target = agenda.pop()              // next available task to try
-  pathTaken = Coupler.find path to target   // store hops for debug / FailureReport / cache
-  if path fail: continue
-  inspect when peeled (one candidate Task); if fail: continue
-  // remaining agenda kept as alts if later leg fails
-  if no next leg: segment OK
-  else if Coupler(target.out → next type) OK: continue booking
-  else restore working overlay; peel next from agenda
-fail leg
+// DECIDED segment attempt
+agenda = sort(Oracle++ filter(Prefilter pool))   // goals for type T_i; terminal-aware
+result = Coupler.couple(tail, goals=agenda, working, inspector, request, caps)
+// inspect/path fails stay in open set; first OK wins
+// unused goals → alts until type is checkpointed (C2c)
 ```
 
-| Rule | Decision |
-|------|----------|
-| Agenda = Oracle-filtered, sorted **targets** | **Yes** |
-| Peel top → Coupler | **Yes** |
-| Inspect **when peeled** (not eager-all) | **Yes** (option A) |
-| Store **pathTaken** to each target | **Yes** (track/debug / report / sticky keys) |
-| Full fabric paths precomputed into agenda? | **No** |
-| Who owns agenda? | **Assembler** |
+#### C2b — Inter-leg backtrack — **DECIDED**
 
-#### Checkpoint timing (DECIDED)
+On failure of a later segment, Assembler **may backtrack** and retry prior choices, but **only as far back as the last Checkpoint** (not past a checkpointed StationType).
 
-Checkpoint = do not try **other stations of this StationType** on this Booking.
+```text
+// Conceptual
+fail at leg j
+→ restore working overlay to state at last Checkpoint boundary
+→ resume with remaining alts for the first non-checkpointed leg on the stack
+→ never reopen StationTypes that are already checkpointed
+```
 
-- **Too early:** checkpoint type B as soon as `1:B:1` accepts → cannot switch to another B station if C fails. (Retrying **same** B with `2:B:2` is still OK under checkpoint.)  
-- **DEFAULT:** checkpoint type B only **after the next non-transparent leg (C) has a successful working Task** (or B is last leg and booking is SAT).  
-- If search backtracks **through** C and abandons B, **clear** B’s type checkpoint.  
+| Rule | Status |
+|------|--------|
+| Backtrack allowed | **Yes** |
+| Backtrack floor | **Last Checkpoint** (cannot undo a checkpointed type’s Station choice to try sibling Stations of that type) |
+| Past last Checkpoint | **No** — those binds are frozen for this booking resolve |
+| Cost risk | Large alt × fabric search space — **heuristics + Oracle++ + budgets required** (not optional nice-to-haves) |
+
+**Product note:** This can be a large graph and slow before UNSAT. Mitigations (implement; tune with goldens/profiling):
+
+- Oracle++ terminal/chain filters (fewer dead-end first-fits)  
+- edgeCost / NeighborRank (prefer fill-first, non-transparent, sticky)  
+- Coupler caps: H, V, max expansions, wall clock → `BUDGET`  
+- Checkpoint as soon as **allowed** (after next non-transparent OK) to **shrink** future backtrack depth  
+- FailureReport should still explain first emptying stage, not dump full open set  
+
+Exact numeric caps remain policy (**OPEN** numbers only — not the backtrack rule).
+
+#### C2c — Alts vs checkpoint — **DECIDED**
+
+| Phase | Alts (other goals of type T not chosen) |
+|-------|----------------------------------------|
+| After multi-sink binds T (e.g. N1) but **before** next non-transparent leg succeeds | Alts for T **retained** for backtrack if the **next** leg fails (N not yet checkpointed) |
+| After next non-transparent succeeds (e.g. path uses N1 then X2 inspect OK) → **checkpoint T** | Alts for T **discarded or ignored** — never try other Stations of type T on this booking |
+| Same Station, other finishes (e.g. `2:N1:2`) while T not checkpointed | Allowed under checkpoint rules only as prior docs: checkpoint blocks **other stations of type**, not necessarily other outs of the **same** station until product tightens — **DEFAULT:** checkpoint = other **Stations** of type T |
+
+**Why not checkpoint on first inspect of N1 alone:** next leg can still fail; then we need other N sinks (or other paths). Matches “checkpoint only after next non-transparent OK.”
+
+#### C2d — Transparent mid-path Inspector — **DECIDED**
+
+**Every visit** (each in→out hop on a transparent Station): Coupler builds a candidate Task and runs **Inspector** (same API). May update tasking and **Task.context** for downstream. Not topology-only skip.
+
+#### Checkpoint timing (DECIDED) — aligned with C2b/C2c
+
+Checkpoint = do not try **other Stations of this StationType** on this Booking.
+
+- **Too early:** checkpoint type N as soon as N1 inspect OK → cannot switch to N2 if X fails.  
+- **DECIDED:** checkpoint type N only **after the next non-transparent leg has a successful working Task** (or N is last leg and booking is SAT).  
+- If backtrack **clears** past a failed next leg without having checkpointed N, N’s alts remain usable until checkpoint.  
+- Once checkpointed, alts for that type are gone (C2c).  
 - Whole Booking SAT freezes via commit.
-
-So: **yes** — earliest safe checkpoint for B is after the **next** non-transparent station succeeds (last leg: at full booking SAT).
 
 ### 3.10 Sticky cache (SAT + unsat)
 
@@ -630,7 +693,27 @@ StickyRecord {
 }
 ```
 
-#### Unsat bust (hope only, scoped)
+#### SAT bust (plan-relevant, scoped) — **DECIDED**
+
+SAT sticky is valid only while **this booking’s plan** still matches the world. Relevance ⊆ stations/links/types **on the SAT plan** (route + bindings), plus the booking demand itself.
+
+| Change | Bust **this** SAT? |
+|--------|---------------------|
+| This booking’s **requests** / legs / demandHash | **Yes** |
+| This booking’s **start/stop** (timeWindow) | **Yes** |
+| **Setup** on a Station **used by this booking’s plan** | **Yes** |
+| Station **CLOSED** (or online→false) on a Station **used by plan** | **Yes** |
+| Link **CLOSED** / offline on a Link **used by plan** | **Yes** |
+| This booking **deleted** / cancelled | **Yes** (drop sticky + release tasking) |
+| This booking **unsubmitted** (withdrawn from engine queue) | **Yes** (drop sticky; treat as no longer scheduled) |
+| Unrelated station/link/type not on plan | **No** |
+| Tasking changes on unused stations | **No** (unless they invalidate via other rules) |
+| liveData | **No** auto (same as unsat) |
+| Another booking claims elsewhere | **No** by itself (this plan’s resources unchanged) |
+
+After SAT bust: re-resolve this booking (and any policy wake of others). Do **not** return sticky plan.
+
+#### Unsat bust (hope only, scoped) — **DECIDED** (confirmed)
 
 | Change | Bust **this** unsat? |
 |--------|----------------------|
@@ -643,6 +726,8 @@ StickyRecord {
 | Unrelated type X | **No** |
 | liveData | **No** auto |
 | Inspector jar | **N/A** (StationType/jar; restart = cold) |
+
+**Overlap note:** SAT and UNSAT use **different** bust tables (plan-relevant vs hopeful). Same world event can bust one booking’s SAT and another’s UNSAT without busting everything.
 
 #### FCFS = **submit** time (DECIDED)
 
@@ -706,7 +791,7 @@ Context = Record<string, JsonValue>   // on each Task
 **DEFAULT v1** namespacing examples:
 
 - From non-transparent bind: `{stationTypeId}.{fact}` e.g. `refrigerated.cabinets = 4`  
-- From path: capability keys e.g. `clearance.y2_stamp = true` (written into Task.context as Coupler advances)
+- From path: capability keys e.g. `clearance.y2_stamp = true` — **written only by Inspector** when Coupler visits and inspect runs (not a separate publish_on_hop catalog). Not every Inspector writes keys.
 
 ### 4.2 How context grows
 
@@ -714,7 +799,9 @@ Context = Record<string, JsonValue>   // on each Task
 
 1. Coupler appends a **candidate Task** (in/out known from topology; context seeded from **previous Task.context** on the path, or `{}` at start).  
 2. Inspector runs on full `Task[]` (existing + candidate).  
-3. On accept, inspector places request material into **taskingConfiguration** and puts **downstream facts into Task.context** so later stations can read them.  
+3. On **inspect OK**, inspector places request material into **taskingConfiguration** and **may** put downstream facts into **Task.context** (optional per type). That map is copied into the next candidate along the path.  
+
+**DECIDED:** There is **no** separate `publish_on_hop` registry for “who publishes facts.” **Inspector is the only writer** of Task.context keys. Coupler search state carries **`(port, context)`** (context = flowing copy of last accepted Task.context) so alternate paths can differ.
 
 **Canonical “current context” for the booking path (DECIDED):**  
 There is **no separate booking-global Context store**.  
@@ -829,7 +916,7 @@ for station in pool(stationTypeId) if OPEN and not checkpoint-closed:
 | **full** | all (i,j) | Each hop_key exclusive |
 
 **OPEN:** shared/combine medium (true RF combine).  
-**DEFAULT v1:** exclusive only — simpler reservations. Document combine as v2.
+**DECIDED:** exclusive only — product rule. Soft multi-booking combine/share on Ag is **out of scope** (not a deferred “v2 feature”).
 
 ---
 
@@ -840,6 +927,7 @@ Config object (file or DB), not hard-coded:
 ```text
 Policy {
   coupler: {
+    // DECIDED defaults (toy); all fields configurable per engine/resolve
     max_hops: 16                  // H
     max_visits_per_station: 3     // V
     max_expansions: 50_000
@@ -853,7 +941,8 @@ Policy {
   }
   assembler: {
     mode: "first_fit"             // DECIDED v1
-    backtrack_depth: 0            // DEFAULT v1: no backtrack; fail at leg
+    // DECIDED C2b: inter-leg backtrack floor = last Checkpoint (not a numeric depth of 0)
+    inter_leg_backtrack: "to_last_checkpoint"   // DECIDED v1 — not "off" / not backtrack_depth: 0
     sticky_prefer: true
     use_neighbor_rank_for_goals: true  // rank leg candidate stations with same SmartNode inputs
   }
@@ -862,65 +951,70 @@ Policy {
     negative_unsat: true
     // hopeful events bust UNSAT; tighter claims do not
   }
-  class_overrides: {
-    [class_id]: { checkpoint: bool, backtrack_reopen: bool }
+  station_type_overrides: {
+    [stationTypeId]: { checkpoint: bool }  // per-type checkpoint enable; reopen is C2b not a separate flag
   }
 }
 ```
 
-### Open questions → DEFAULT v1
+### Policy decisions (aligned with §3.9d)
 
-| Question | DEFAULT v1 | Notes |
-|----------|------------|--------|
-| Agg/exp shared vs exclusive | **Exclusive** | Combine later |
-| Backtrack on checkpoint fail | **0** (fail; report checkpoint) | Set `backtrack_depth: 1` later to reopen last checkpoint |
-| First-fit vs price all goals | **First-fit multi-sink** (stop at first goal in rank order) | Beam later |
-| Leg 1 entry | **Virtual S0 → Coupler** into prefiltered first StationType (inputs unused) | **§3.7** — not Inspector-only bind |
+| Question | v1 | Notes |
+|----------|-----|--------|
+| Agg/exp shared vs exclusive | **Exclusive (DECIDED)** | Combine/share out of scope |
+| Search quality | **First-fit multi-sink (DECIDED)** | Best-of-K / beam not the v1 algorithm (not a deferred deliverable) |
+| Inter-leg backtrack | **to last Checkpoint (DECIDED C2b)** | **Required.** Never reopen past a checkpointed StationType. |
+| Leg 1 entry | **Virtual S0 → Coupler** | **§3.7** — not Inspector-only bind |
 | UNSAT invalidation | Relevance-scoped hope (§3.10) | Not global token nuke |
-| Path Context | **Per Task.context**; flowing var = last accepted Task.context | §4.2 |
-| Transparent facts | Inspector writes Task.context (e.g. stamp) | No Yard entity |
+| Path Context | **Per Task.context**; `(port, context)` in search | §4.2 |
+| Transparent facts | Inspector writes Task.context | No `publish_on_hop` registry |
 
 ---
 
-## 8. Algorithms (implement exactly — Station model; **§3.7 wins** if conflict)
+## 8. Algorithms (implement exactly — Station model; **§3.7 / §3.9d C2 win** if conflict)
+
+**Coupler shape:** **Option A multi-sink** (DECIDED). Pivot debate: [COUPLER_OPTION_A_VS_B.md](./COUPLER_OPTION_A_VS_B.md).
 
 ### 8.0 Assembler ↔ Coupler contract
 
-| | **Assembler** | **Coupler (A\*/BFS)** |
-|--|---------------|------------------------|
-| **Job** | Legs, prefilter, agenda/alts, checkpoints, sticky, whole-booking commit | Path from tail or **virtual S0** to peeled target; inspect when peeled |
-| **Calls** | One segment **per leg including first** (S0 for first StationType) | Internal expansions; try/fail paths stay inside segment |
-| **Success** | Working overlay + route; commit only on full Booking SAT | Path + inspect-OK Task[] on goal |
-| **Failure** | UNSAT; discard overlay | Exhaust agenda / budget |
+| | **Assembler** | **Coupler (multi-sink A\*/BFS)** |
+|--|---------------|----------------------------------|
+| **Job** | Legs, prefilter, Oracle++ goal set, alts policy, checkpoints, sticky, commit | One multi-sink search from **tail out-track** or **S0** over all goals; inspect at goal in open set |
+| **Calls** | One `couple()` per segment attempt; re-call for next leg or **inter-leg backtrack to last Checkpoint (C2b DECIDED)** | Path + inspect fails for goals stay inside the same call |
+| **Success** | Working overlay + route; commit only on full Booking SAT | Path + inspect-OK `Task[]` on first-fit goal |
+| **Failure** | UNSAT; discard overlay | Exhaust open set / budget → null |
 | **Transparent** | Not demand legs | Middle of Link graph |
-| **Does not** | Expand every track | Own multi-booking queue / sticky |
+| **Does not** | One A\* per Station for within-segment retries | Own multi-booking queue / sticky |
 
 ```text
 working = empty overlay on CommittedWorld
-tail = null   // first leg uses virtual S0
-for leg in booking.legs:  // non-transparent StationTypes only
-  candidates = Prefilter pool
-  agenda = sort(oracleFilter(finishes toward candidates))  // first: S0→candidates
-  peel agenda until Coupler path + inspect OK or fail
-  if fail: discard working; return UNSAT
-  // checkpoint *previous* type only after this leg succeeded (§3.9d)
-if all legs OK: commit working; return SAT
+tail = null   // first leg → virtual S0
+for leg in booking.legs:  // non-transparent only
+  candidates = Prefilter(pool of leg.stationTypeId)
+  agenda = sort(Oracle++.filterForLeg(tail, candidates, remainingTypes incl. terminal))
+  result = Coupler.couple(tail, goals=agenda, working, inspector, leg.request, caps)
+  if fail:
+    // C2b DECIDED: backtrack to last Checkpoint using remaining alts (C2c); else UNSAT
+    if canBacktrackToLastCheckpoint(altStack): restore; continue
+    discard working; return UNSAT
+  apply result; keep unused goals as alts until type checkpointed (C2c)
+  tail = accepted Task.output out-track  // bound out-track, not Station alone
+  // checkpoint previous type per §3.9d after next non-transparent OK
+commit working; return SAT
 ```
 
-**Wrong:** first leg = Inspector-only bind with **no** Coupler.  
-**Right:** first leg = **S0 + Coupler** (§3.7).  
-**Wrong:** Assembler starts a new A* after each short-path inspect fail.  
-**Right:** fails stay inside segment / agenda peel.
+**Wrong (void):** first leg Inspector-only; Assembler peel/`tryTarget` per goal within a segment (Option B); `backtrack_depth: 0` as v1 product (contradicts C2b).
 
 ### 8.1 Resolve (Assembler) — sketch
 
 ```text
 function placeBooking(booking, world, opts={force:false}):
-  if !opts.force and stickySAT.hit(booking, world): return cached SAT
-  if !opts.force and stickyUNSAT.hit(booking, world): return cached UNSAT
+  if !opts.force and stickySAT.hit(...): return cached SAT
+  if !opts.force and stickyUNSAT.hit(...): return cached UNSAT
 
   working = WorkingState(world)
   route = []; bindings = []; tail = null; closedTypes = {}
+  altStack = []   // C2b/C2c DECIDED: remaining goals per non-checkpointed leg for backtrack
 
   for legIndex, leg in enumerate(booking.legs):
     prefilter = registry.prefilter(leg.stationTypeId)
@@ -929,114 +1023,96 @@ function placeBooking(booking, world, opts={force:false}):
     candidates = [s for s in pool if prefilter.canUse(s.setup, leg.request, s.liveData).ok]
     if candidates empty: return fail(NO_CANDIDATES, legIndex)
 
-    agenda = buildAgenda(tail, candidates, nextLegGoals, oracle)  // sort: edgeCost, rank, track
-    // first leg: tail=null ⇒ virtual S0; first type inputs unused
+    agenda = Oracle++.goalsForLeg(tail, candidates, booking.legs[legIndex..], terminal=last)
+    // sort: edgeCost, NeighborRank, track name
+    if agenda empty: return fail(UNREACHABLE, legIndex)
 
-    segmentOk = false
-    while agenda not empty:
-      target = agenda.pop()
-      path = Coupler.tryTarget(tail, target, working, inspector, leg.request)
-      if path is null: continue
-      apply path to working; route += path; bindings += …
-      tail = out track of accepted Task on goal (null if terminal last leg)
-      segmentOk = true
-      // remaining agenda kept for backtrack if later leg fails
-      break
-    if not segmentOk:
-      // backtrack prior alts or:
+    result = Coupler.couple(tail, goals=agenda, working, inspector, leg.request, caps)
+    if result is null:
       discard working; return fail(..., legIndex)
-    if legIndex > 0: closedTypes.add(booking.legs[legIndex-1].stationTypeId)
+
+    apply result.pathTaken + result.tasking to working
+    route += result.pathTaken; bindings += …
+    tail = out-track of accepted Task on goal  // null if terminal last leg with no out
+    if legIndex > 0: closedTypes.add(booking.legs[legIndex-1].stationTypeId)  // after next OK
 
   commit working → world
   stickySAT.save(...)
   return SAT
 ```
 
-### 8.1b Legacy pseudocode removed
-
-> The old loop “if tail is null: bind via Inspector only; else couple” is **void**. Use §8.1 above.
+### 8.1b Legacy first-leg bind — void (DECIDED)
 
 ```text
-// REMOVED (do not implement):
-//   if tail is null: car = first candidate inspector.accept(...); bind without Coupler
-// Use virtual S0 + couple/agenda for first leg instead.
+// REMOVED: if tail is null: bind via inspect only without Coupler
+// REMOVED: while agenda: Coupler.tryTarget(...)   // Option B — not v1
 ```
 
-### 8.1c Sort keys (no separate rank_cost API)
+### 8.1c Expand / agenda sort (DECIDED — lexicographic ExpandKey)
 
 ```text
-// Agenda / neighbor sort — §3.7b only:
-edgeCost ascending
-then neighborRank descending if type defines SmartNode and edgeCost equal
-then track name
-// sticky preferred station may be forced first as policy override when sticky_prefer
+// §3.7b — do NOT sum components
+compare ExpandKey:
+  0 preferInUse          // higher first (fill-first)
+  1 preferNonTransparent // higher first
+  2 distToTerminal       // lower first (Oracle++ length to Tk)
+  3 neighborRank         // higher first (SmartNode; default 0)
+  4 stationName          // lower first (lexicographic)
+  5 portName             // lower first (lexicographic)
+// sticky preferred station may be forced first when sticky_prefer (policy override)
 ```
 
-### 8.2 Coupler (multi-sink; implement with §3.7 / §3.7b)
+### 8.2 Coupler (multi-sink — DECIDED)
+
+**Contract:** `couple(tail, goals, …)` always multi-sink.  
+`goals` = Assembler agenda (Oracle++ + prefilter + sort).  
+Inspect rejects and short-path failures **continue in the same open set**.
 
 ```text
-state = {
-  port: Port,                 // current position (device, side, track) — simplify: arrive at device in_track ready to leave
-  context: Context,
-  g: int,                     // cost
-  hops: Hop[],
-  visit_count: Map<yard_id, int>,
-  used_hop_keys: Set,
-  used_cables: Set
-}
+function couple(tail, goals, working, inspector, request, caps):
+  // tail = null ⇒ virtual S0 → candidate start stations (first leg)
+  // tail = bound OUT track ⇒ expand Links from that out only
+  // goals = finishes { stationId, in?, out? } of next StationType
 
-// Representation DEFAULT v1:
-// Nodes in search graph = (device_id, track_id, side) after arriving on an in track,
-// or free to choose legal out.
-
-function couple(tail_port, candidate_cars, context0, inspector, leg, caps):
-  starts = expand_outs(tail_port)  // car out tracks
-  goals = all in-ports of candidate_cars
-
-  open = priority queue  // bfs: g; astar: g+h(port)
-  push all starts with context0
+  open = priority queue  // f = g + h; g = hop count; h = Oracle++ dist to nearest segment goal
+  push starts from tail / S0 with context0 = copy(prev Task.context) or {}
   expansions = 0
 
   while open not empty:
-    s = pop
+    s = pop  // best f among open; when expanding children use ExpandKey order (§3.7b)
     expansions++
-    if expansions > max_expansions or wall exceeded: return null, BUDGET
+    if over budget: return null, BUDGET
 
-    // Goal check: if s.port is in-port of a candidate car
-    if is_goal(s.port):
-      car = owner(s.port)
-      // apply any pending; context already includes path facts
-      if inspector.accept(leg.request, car, s.context).ok:
-        return s.hops + hop_into_car, car, s.context
+    if is_goal(s.port, goals):
+      candidate = Task(input, output, context=copy(s.context), …)
+      outcome = inspector.inspect(setup, working.tasking(station)+[candidate], request, liveData)
+      if outcome is Task[]:
+        return { pathTaken, target, stationId, tasking: outcome, … }
       else:
-        continue  // wrong car or still missing facts
+        continue  // INSPECT_FAIL — stay in open set
 
-    for edge in legal_edges(s):  // cable out→in OR internal in→out on same device
-      if hop_key repeated: skip
-      if cable backtrack forbidden: skip
-      if yard visit_count exceeds V: skip
-      if hops length >= H: skip
-      if resource reserved by other booking: skip  // CAPACITY
+    neighbors = legal_edges(s)  // Link OUT→IN or legalPairs in→out; hop_key, H, V, online, CAPACITY
+    sort neighbors by ExpandKey lexicographic (§3.7b)
+    for edge in neighbors:
+      g2 = s.g + 1   // hop baseline for A* accounting
+      push neighbor with f = g2 + h(Oracle++ dist to nearest multi-sink goal)
 
-      ctx2 = s.context
-      if edge is yard internal hop or enters yard:
-        ctx2 = apply(publish_on_hop for that yard)
-
-      // occupancy check on hop_key / cable
-      push neighbor state
-
-  return null, UNREACHABLE or CAPACITY_BLOCKED
-    // CAPACITY if any goal was expanded to but only busy edges remained
-    // UNREACHABLE if oracle said no or never near goals
+  return null, UNREACHABLE | CAPACITY
 ```
 
-**Oracle (optional):** precompute hop distances **ignoring** tasking/liveData for admissible-style `h` (optimistic). Dynamic penalties live in **`edgeCost` (§3.7b)** on `g`, not necessarily in `h`.
+**Oracle++ `h`:** hop distances ignoring tasking; dynamic preference in **`edgeCost` / NeighborRank** on `g`.
 
-**Expand order:** legal neighbors sorted by **`neighborRank` (SmartNode, sees tasking)** then **`edgeCost`** then stable ids (§3.7b).
+### 8.3 Bound out-track / tail — **DECIDED**
 
-### 8.3 choose_tail_port
+A successful inspect produces a **Task** with concrete **input** and **output** tracks (output may be null on terminal arrival).
 
-**DEFAULT v1:** lowest track_id among Car **out** ports that are online; sticky previous out track if still free.
+| Fact | Status |
+|------|--------|
+| Next Coupler segment **tail** = that Task’s **output** out-track | **DECIDED** |
+| Binding always includes station **and** the Task’s in/out used for this booking | **DECIDED** |
+| No separate post-inspect “pick among free outs” ranker | **DECIDED** — out was chosen when the candidate Task was formed and inspect passed |
+
+Which out is proposed in the candidate Task is part of Coupler expansion + inspect (legalPairs, Links to continue, first-fit search order). Engine does **not** re-pick a different out after success.
 
 ---
 
@@ -1047,7 +1123,7 @@ function couple(tail_port, candidate_cars, context0, inspector, leg, caps):
 | Op | Input | Output |
 |----|--------|--------|
 | `PUT /bookings/{id}` | `{ legs: Leg[] }` | Booking created/updated (clears snapshot if legs_hash changes) |
-| `POST /bookings/{id}/resolve` | `{ force?: bool, forcePriority?: bool }` | `ResolveResult` — `force` bypasses sticky/UNSAT cache; `forcePriority` reserved (SPEC Q16), **not implemented v1** |
+| `POST /bookings/{id}/resolve` | `{ force?: bool, forcePriority?: bool }` | `ResolveResult` — `force` bypasses sticky/UNSAT cache; `forcePriority` **reserved / sole deferred** (SPEC Q16 — do not implement yet) |
 | `POST /bookings/{id}/release` | — | releases reservations; status pending; may keep last failure |
 | `GET /bookings/{id}` | — | Booking + snapshot/failure |
 
@@ -1137,13 +1213,16 @@ Cached UNSAT reusable while `hopeful_rev` and `legs_hash` and `policy_rev` (if t
 
 ## 11. Concurrency & claims
 
-**DECIDED v1:**
+**DECIDED v1 — serial engine (no parallel booking resolves):**
 
-1. Resolve runs in a **DB transaction** (or single-threaded in-memory lock per process for embedded).  
-2. Order of locking: sort resource ids; claim cars then hops to avoid deadlock.  
-3. If conflict mid-resolve → abort, return retryable error or `CAPACITY_BLOCKED`.  
-4. Two concurrent resolves: serializable isolation; one wins claims.  
-5. **No force-kick preemption in v1** (SPEC Q16). **Allowed:** priority-ordered place + same-run **plan re-place** of lower-priority bookings when a higher-priority booking **SAT-commits** and takes a resource at a time event (§3.9b “priority steal”).
+1. **One engine run at a time.** Kafka (or other) triggers that need scheduling are **queued**; runs do not overlap.  
+2. **World is static for the duration of a run’s read of CommittedWorld** at start of each booking step; after each booking **SAT**, commit updates CommittedWorld so the **next** booking in the same run sees new tasking.  
+3. **Within a run:** bookings processed **one at a time**, ordered by priority then submitTime (FCFS). Not parallel.  
+4. **Within a booking:** WorkingState overlay only; **commit on full-booking SAT**, discard on fail — no need for cross-booking locks because nothing else runs concurrently.  
+5. **Force-kick preemption** (`forcePriority`) is the **sole deferred** product feature (SPEC Q16). **In scope:** priority-ordered place + same-run **plan re-place** when a higher-priority booking **SAT-commits** and takes a resource at a time event (§3.9b).  
+6. Persistence: engine run may still sit in a DB txn / process-level mutex so a second process cannot run a second engine against the same plant — **serialization of runs**, not per-hop locks between parallel resolves.
+
+**Not the product design:** concurrent multi-threaded `placeBooking` on the same world without a global engine queue (use serial runs — §11).
 
 ---
 
@@ -1159,6 +1238,8 @@ Cached UNSAT reusable while `hopeful_rev` and `legs_hash` and `policy_rev` (if t
 
 **Trace (debug):** one resolve id; log leg start, candidate counts, coupler result, fail stage.
 
+**FailureReport samples (DECIDED):** support **capped** `inspector_samples` / failed goal arrivals (stationId, code, short path summary). Not the full open set. May be empty on a given result if none collected; the capability is in scope.
+
 ---
 
 ## 13. Golden acceptance tests
@@ -1167,23 +1248,23 @@ Implement as automated tests (toy topology fixture).
 
 | ID | Name | Expect |
 |----|------|--------|
-| G1 | Restricted re-entry | Path includes two Y1 hops with different hop_keys (e.g. `1:Y1:2` then `5:Y1:6`); reaches N car (see walkthrough `loopback`) |
+| G1 | Restricted re-entry | Path includes two Y1 hops with different hop_keys (e.g. `1:Y1:2` then `5:Y1:6`); reaches N station (see walkthrough `loopback`) |
 | G2 | No oscillation | With Y1↔Y2 cables present, search cannot spin forever: `forbid_repeat_hop_key` + `max_visits_per_yard` / `max_hops` / expansions → finite `BUDGET` or UNSAT (never hang) |
-| G3 | Inspector context | cabinets=4 filters Normal; wrong cars rejected |
-| G4 | Checkpoint | After R bind, other R cars never tried |
+| G3 | Inspector context | cabinets=4 filters Normal; wrong stations rejected |
+| G4 | Checkpoint | After R bind, other R stations never tried |
 | G5 | Context path stamp | Short path to N-04 fails inspect (missing stamp in Task.context); path via Y2 writes stamp then N-04 succeeds |
-| G6 | Capacity blocked | Reserve blocking hop; CAPACITY_BLOCKED + blocker id |
+| G6 | Capacity blocked | Reserve blocking hop; `CAPACITY` (+ blocker id; alias CAPACITY_BLOCKED) |
 | G7 | Sticky SAT | resolve×2 identical route/consist; second sticky_hit |
 | G8 | Negative UNSAT | fail; resolve again no hopeful change → negative_cache_hit, expansions=0 |
 | G9 | Hopeful release | after release blocker, resolve may SAT |
-| G10 | Determinism | shuffle car iteration order in fixture → still same bind order via sort by id |
+| G10 | Determinism | shuffle station iteration order in fixture → still same bind order via sort by id |
 | G11 | Duplicate yard in consist | route lists same yard_id twice when re-entered |
-| G12 | First leg no fabric | leg0 binds car, route empty or car-only hop |
+| G12 | First leg via S0 | leg0 binds station via virtual S0 + Coupler; route has start hop(s) |
 
 ### Toy topology (minimal)
 
-- Cars: R-17, R-22, N-04, N-08, N-12, D-02, D-11  
-- Stations: Y1/Y2 = **transparent** Switch StationTypes; N-*/R-*/D-* = non-transparent  
+- Stations (non-transparent): R-17, R-22, N-04, N-08, N-12, D-02, D-11  
+- Transparent switches: Y1/Y2 = Switch StationTypes; R-*/N-*/D-* = demand StationTypes  
 - Y1 restricted legalPairs (`1→1`, `1→2`, `1→3`, `5→6`; **not** `1→6`); Y2 (`1→5`, `1→6`); Y2 inspect may write `clearance.y2_stamp` into Task.context  
 - Links: Y1:1→N-04, Y1:2→Y2:1, Y1:3→N-08, Y1:6→N-12, Y2:5→N-04, Y2:6→Y1:5, N-04→D-02, N-12→D-11  
 - **G5:** stamp gate is on **Normal (N-04)**, not Docking — short Y1→N-04 fails inspect; via Y2 stamp then N-04 OK  
@@ -1194,15 +1275,18 @@ Implement as automated tests (toy topology fixture).
 
 ## 14. Phased delivery
 
+**All phases below are required sequencing toward v1 DoD** — not a menu of optional features.  
+**Only deferred product feature:** force-priority preemption (§2.0 / Q16).
+
 | Phase | Deliverable | Exit criteria |
 |-------|-------------|---------------|
-| **P0** | Port graph + Yard maps + Coupler only (fixed tail → fixed car) | G1, G2 |
-| **P1** | Assembler multi-leg + Inspector + checkpoint + first-fit | G3, G4, G10, G12 |
-| **P2** | Path-acquired Context + yard publish_on_hop | G5, G11 |
-| **P3** | Reservations + CAPACITY_BLOCKED | G6 |
-| **P4** | Sticky SAT + negative UNSAT | G7, G8, G9 |
-| **P5** | Oracle distances + A* + metrics | p99 under budget on toy×N |
-| **P6** | Optional backtrack_depth=1, beam | only if G-fail rate needs it |
+| **P0** | Port graph + transparent maps + Coupler only (fixed tail → fixed station) | G1, G2 |
+| **P1** | Assembler multi-leg + Prefilter/Inspector + first-fit + **checkpoint timing** + **alts (C2c)** + **inter-leg backtrack to last Checkpoint (C2b)** | G3, G4, G10, G12; multi-leg fail retries prior non-checkpointed alts |
+| **P2** | Path-acquired Context via **Inspector-written Task.context** (transparent + goal inspect) | G5, G11 |
+| **P3** | Reservations + `CAPACITY` | G6 |
+| **P4** | Sticky SAT + negative UNSAT (bust tables §3.10) | G7, G8, G9 |
+| **P5** | Oracle++ (incl. terminal/chain) + A* + metrics (budgets configurable) | p99 under budget on toy×N; G1–G12 green with full stack |
+| **P6** | Kafka adapters (in/out plans, claims, setups) | SPEC §10.1; after domain goldens |
 
 ---
 
@@ -1210,8 +1294,8 @@ Implement as automated tests (toy topology fixture).
 
 | Case | Behavior DECIDED v1 |
 |------|---------------------|
-| Empty pool for Class | `NO_CANDIDATES` |
-| All cars busy | `ALL_BUSY` if accept would pass else NO_CANDIDATES |
+| Empty pool for StationType | `NO_CANDIDATES` |
+| All stations busy | `ALL_BUSY` if inspect would pass else NO_CANDIDATES |
 | Disconnected fabric | `UNREACHABLE` |
 | Checkpoint dead-end | `CONTEXT_DEAD_END` / NO_CANDIDATES; list checkpoints |
 | force retry loop | allowed; metrics only; no auto force |
@@ -1245,14 +1329,27 @@ On ~5k cars / ~500 yards: sticky &lt; 5ms; cold resolve aim &lt; 500ms with caps
 
 ## 18. Open items that still need a human (summary)
 
-These have **DEFAULTS** above so build can start; confirm before production:
+### 18.0 Coupler / Oracle++ status
 
-1. **Combine/share** on aggregator ports (v1 exclusive).  
-2. **Backtrack depth** (v1 zero).  
-3. **Whether first leg ever needs fabric** (v1 no).  
-4. **Exact Fact key conventions** for production Classes.  
-5. **Hard vs soft claims** during planning (v1 hard on SAT only; resolve txn holds locks until commit/abort).  
-6. **Language/runtime** — **DEFAULT / preferred: Kotlin (JVM)** if that matches the rest of the platform (see §18.1).
+| ID | Status |
+|----|--------|
+| **C2** multi-sink Option A | **DECIDED** — §3.9d C2; pivot [COUPLER_OPTION_A_VS_B.md](./COUPLER_OPTION_A_VS_B.md) |
+| **Oracle++** chain + terminal reachability | **DECIDED** — §3.7 |
+| **C2b** Inter-leg backtrack to last Checkpoint | **DECIDED** — §3.9d C2b; **P1** |
+| **C2c** Alts until checkpoint; then discard | **DECIDED** — §3.9d C2c |
+| **C2d** Transparent inspect every visit | **DECIDED** — §3.9d C2d |
+| **8.3** Tail = accepted Task.output | **DECIDED** |
+
+**Rule:** unclear → **OPEN** + ask. Do not mark DECIDED by agent inference.
+
+Other items (confirm before production):
+
+1. **Combine/share** on aggregator ports — **DECIDED exclusive v1**.  
+2. **Numeric budgets** — **DECIDED:** defaults H=16, V=3, exp=50_000, wall_ms=500 (toy); **all configurable** per engine/resolve.  
+3. **First leg** uses S0 + Coupler (**DECIDED**; old “bind only” void).  
+4. **Exact Fact key conventions** for production StationTypes.  
+5. **Concurrency** — **DECIDED:** serial engine runs + one booking at a time; commit on SAT (§11).  
+6. **Language/runtime** — **DECIDED: Kotlin (JVM)**; package `trackplan` (see §18.1).
 
 ### 18.1 Implementation language
 
@@ -1263,7 +1360,7 @@ These have **DEFAULTS** above so build can start; confirm before production:
 | **Go** | Simple deploy, fine graph search | You already standardized on Kotlin services |
 | **Python** | Prototyping only | Cold-path resolve latency + typing discipline for this engine |
 
-**Recommendation: stick with Kotlin** for v1–v2 of this service.
+**DECIDED: Kotlin (JVM)** for this service (v1+).
 
 Reasons: algorithm fit (int graph search), platform fit, Inspectors as interfaces, correctness/sticky first, escape hatch to native Coupler only if profiler demands it.
 
@@ -1373,7 +1470,7 @@ Better patterns:
 
 1. Sticky SAT + negative UNSAT (skip search)  
 2. prefilter shrinks goals  
-3. Multi-sink one search (not per-Car A*)  
+3. Multi-sink one search (not per-Station / per-target A*)  
 4. Hard H / V / expansion / wall caps  
 5. hop_key anti-loop  
 6. Oracle distances for A*  
@@ -1451,16 +1548,16 @@ domain plan  →  Kafka OUT (claims, setups, booking status)
 
 ```text
 // Kotlin packages (example)
-catalog/     Class, Setup, Car, Yard, Cable, YardType
-inspectors/  per-Class Inspector implementations + registry
-fabric/      port graph build, oracle
+catalog/     StationType, Station, Link, Track, schemas
+inspectors/  per-StationType Inspector + Prefilter registry
+fabric/      port graph build, Oracle++
 coupler/     multi-sink search
-assembler/   resolve loop
-reserve/     reservations + txn
-cache/       sticky + negative
-api/         optional HTTP facade for debug / admin
+assembler/   resolve loop (incl. C2b backtrack)
+reserve/     reservations / exclusive capacity
+cache/       sticky SAT + negative UNSAT
+api/         debug/admin facade if needed
 fixtures/    toy topology + golden tests
-kafka/       // later: inbound projection + outbound claims/setups/plans
+kafka/       inbound projection + outbound claims/setups/plans (after domain goldens)
 ```
 
 ---
@@ -1471,8 +1568,9 @@ kafka/       // later: inbound projection + outbound claims/setups/plans
 - [ ] Golden tests G1–G12 green  
 - [ ] Resolve API returns SAT/UNSAT with FailureReport  
 - [ ] Sticky + negative cache behavior matches §10  
-- [ ] Route includes Yards; re-entry allowed; hop_key anti-loop  
-- [ ] Context from Car bind + Yard publish_on_hop  
-- [ ] No UI required  
+- [ ] Route includes transparent stations; re-entry allowed; hop_key anti-loop  
+- [ ] Context from **Inspector-written Task.context** (flowing path; no publish_on_hop registry)  
+- [ ] No force-priority preemption required (sole deferred — §2.0)  
+- [ ] Kafka adapters may follow domain DoD (sequencing P6), but domain checklist above is complete without them  
 
-When this checklist is green, the design docs + this spec are sufficient for another session to extend Classes/Inspectors without redesigning the engine.
+When this checklist is green, the design docs + this spec are sufficient for another session to extend StationTypes/Inspectors without redesigning the engine. **Do not** treat DECIDED engine features as optional.

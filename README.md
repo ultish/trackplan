@@ -19,6 +19,7 @@ Start: **[docs/README.md](./docs/README.md)**
 | [docs/BUILD_SPEC.md](./docs/BUILD_SPEC.md) | **Canonical** entities + engine decisions (Station model) |
 | [docs/booking-assembler-design.html](./docs/booking-assembler-design.html) | Interactive walkthroughs (vocabulary pass later) |
 | [docs/FIXTURE_STUDIO.md](./docs/FIXTURE_STUDIO.md) | Fixture Studio design (React Flow, JSON → Kotlin goldens) |
+| [docs/COUPLER_OPTION_A_VS_B.md](./docs/COUPLER_OPTION_A_VS_B.md) | Multi-sink vs peel debate (v1 = multi-sink A) |
 
 ```bash
 open docs/BUILD_SPEC.md

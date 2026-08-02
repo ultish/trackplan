@@ -21,7 +21,7 @@
 
 > Read `docs/SPEC.md` for full design intent, then implement `docs/BUILD_SPEC.md`.  
 > Rail vocabulary only. Pass goldens G1–G12. No UI. Follow DECIDED/DEFAULT; ask only on OPEN items that block you.  
-> Walkthroughs in `booking-assembler-design.html` illustrate Coupler vs Assembler and prefilter vs accept.
+> Walkthroughs in `booking-assembler-design.html` illustrate Coupler vs Assembler and prefilter vs inspect.
 
 **Stack preference:** Kotlin (JVM) microservices, same platform as the rest of the org.
 
@@ -77,95 +77,103 @@ Re-entry: same station twice only with a different hop_key `(stationId,in,out)`.
 ┌──────────────────────────────────────────────────────────┐
 │ ASSEMBLER                                                │
 │  for each StationType leg (non-transparent):             │
-│    prefilter + agenda (edgeCost / NeighborRank)          │
+│    prefilter → candidate Stations                        │
+│    agenda = sort(oracleFilter(finishes))  // goal set    │
 │    first leg: virtual S0 → Coupler (not Inspector-only)  │
-│    else: Coupler from previous Task.out → goals          │
-│    peel agenda: path + inspect; alts on failure          │
+│    else: Coupler from previous Task.out                  │
+│    ONE multi-sink couple(goals=agenda) per segment try   │
+│    remaining agenda → alts only if a *later* leg fails   │
 │    checkpoint type only after *next* non-transparent OK  │
 │    commit tasking only on whole-Booking SAT              │
 │  sticky SAT or UNSAT FailureReport                       │
 └────────────────────────┬─────────────────────────────────┘
-                         │ one call per Class→Class segment
+                         │ one couple() per segment attempt
                          ▼
 ┌──────────────────────────────────────────────────────────┐
-│ COUPLER (multi-sink BFS/A* on port graph)                │
-│  start = tail Car outs                                   │
-│  goals = prefilter-passers of next Class                 │
-│  expand cables + Yard legal in→out                       │
-│  path may visit 0..many Yards of many types              │
-│  on reach goal: accept() with path Context               │
+│ COUPLER (multi-sink BFS/A* on port / track graph)        │
+│  start = tail outs (or virtual S0)                       │
+│  goals = full agenda finishes (not one Station at a time)│
+│  expand Links + legal in→out on stations                 │
+│  path may visit 0..many transparent stations             │
+│  on reach goal: Inspector.inspect(...) → Task[] | fail   │
 │    fail → continue search (do NOT return to Assembler)   │
-│    ok   → early return { car, hops[], context }          │
+│    ok   → early return { station, hops[], tasking }      │
 │  exhausted / budget → failure                            │
 └──────────────────────────────────────────────────────────┘
 ```
+
+**Agenda vs multi-sink — DECIDED Option A (multi-sink).** Assembler builds Oracle++-filtered goals; one `couple(goals=…)` per segment; inspect/path fails stay in Coupler. Option B (peel) is **not v1** — debate/pivot: [COUPLER_OPTION_A_VS_B.md](./COUPLER_OPTION_A_VS_B.md). Oracle++ also filters sinks by reachability to later non-transparent types and the **terminal** StationType (BUILD_SPEC §3.7).
 
 ### 3.2 Wrong vs right interaction
 
 | Wrong | Right |
 |-------|--------|
-| Coupler returns each failed short path to Assembler; Assembler starts a new A* | All tries (short N-04, N-12, then Y2…) happen **inside one** `couple()` |
-| Assembler steps every Yard as a “leg” | Assembler only steps **Classes**; Yards are Coupler fabric |
-| Full `accept` at Assembler drops cars for missing path stamps | `prefilter` only safe drops; stamps checked in `accept` at goal |
-| Closed set = port only after failed accept at N-04 | State includes Context (or don’t close goals after accept-reject) so Y2 path can succeed later |
+| Coupler returns each failed short path / inspect reject to Assembler; Assembler starts a **new** A* (one A* per Station / per agenda peel within the same segment) | All tries (short N-04, N-12, then via Y2…) happen **inside one** multi-sink `couple(goals=agenda)` |
+| Assembler steps every transparent station as a “leg” | Assembler only steps **non-transparent StationTypes**; fabric is Coupler |
+| Full `inspect` at Assembler drops stations for missing path stamps | `prefilter` only safe drops; stamps checked in `inspect` at goal |
+| Closed set = port only after failed inspect at N-04 | State includes Context (or don’t close goals after inspect-reject) so Y2 path can succeed later |
+| (Confusion) “agenda peel” means one Coupler call per target | Agenda builds **goals=** for multi-sink; Assembler re-calls Coupler only for **inter-leg backtrack** with remaining alts |
 
-### 3.3 Long corridors / many Yard types
+### 3.3 Long corridors / many transparent types
 
-Booking legs `ClassA → ClassZ` with only Yards between ⇒ **one Coupler call**.  
-Path may be `A-car → Y₁ → Y₂ → … → Y₁₂ → Z-car`.  
-Twelve yard **types** = different `legal_pairs` / capacity / `publish_on_hop`, not twelve Assembler steps.
+Booking legs `StationTypeA → StationTypeZ` with only transparent stations between ⇒ **one Coupler call**.  
+Path may be `A-station → SW₁ → SW₂ → … → SW₁₂ → Z-station`.  
+Twelve transparent **types** = different `legalPairs` / capacity / Inspector context writes, not twelve Assembler steps.
 
-### 3.4 Why try short path to next Class before extra Yards?
+### 3.4 Why try short path to next non-transparent type before extra transparent hops?
 
-**Search cost heuristic**, not domain knowledge of which Yard publishes stamps.
+**Search cost heuristic**, not domain knowledge of which switch writes stamps.
 
-- Prefer fewer Yard hops / earlier approach to Class goal ports when costs are equal-ish.
-- When stamp already in Context, short path wins quickly.
-- When stamp missing, short arrivals fail `accept`, search **continues** and may discover Y2 via other edges.
-- Inspector **never** names Y2; it only rejects missing Context keys.
-- Algorithm discovers publishers by exploring the fabric with path Context in state.
+- Prefer fewer transparent hops / earlier approach to next-type goal ports when costs are equal-ish.
+- When stamp already in Task.context, short path wins quickly.
+- When stamp missing, short arrivals fail **inspect**, search **continues** and may discover Y2 via other edges.
+- Inspector **never** names Y2; it only rejects missing context keys.
+- Algorithm discovers stamp writers by exploring the fabric; **Inspectors** write keys into Task.context on visit (no `publish_on_hop` registry).
 
-**DEFAULT v1:** small positive cost per Yard hop (or per new Yard device on path). Not a hard ban on Yards before all Class attempts.
+**DEFAULT v1:** small positive cost per transparent hop (or per new transparent station on path). Not a hard ban on transparent hops before all non-transparent attempts.
 
 ---
 
-## 4. Inspector: prefilter vs accept
+## 4. Inspector: prefilter vs inspect
 
 ### 4.1 Rule
 
 | Stage | When | Context | May reject only if… |
 |-------|------|---------|---------------------|
-| **prefilter** | Assembler, before Coupler | Prior legs only | No future path could fix it |
-| **accept** | Coupler, at goal port | Prior + path-acquired | Full fitness for this arrival |
+| **prefilter** | Assembler, before Coupler | No path context (setup + request + liveData only) | No future path could fix it |
+| **inspect** | Coupler, at goal port **and** every transparent visit | Prior + path-acquired Task.context | Full fitness for this arrival / hop |
 
 ### 4.2 Concrete example (Normal, seats > 5)
 
-**Request:** Class Normal, `min_seats: 6`.  
-**Deep check:** Car must support internal routing e.g. track 1 → track 2 on the arrival path.
+**Request:** StationType Normal, `min_seats: 6`.  
+**Deep check:** Station must support internal routing e.g. track 1 → track 2 on the arrival path.
 
 ```text
-prefilter(request, car, context):
-  if car.max_seats < 6: reject("SEATS")   // path never adds seats
+// Prefilter — no Task, no path context
+prefilter(setup, request, liveData):
+  if station.max_seats < 6: reject("SEATS")   // path never adds seats
   if offline / cannot arm Setup: reject(...)
-  return ok   // even if y2_stamp missing — path may supply it
+  return ok   // even if clearance.y2_stamp missing — path may supply it via Inspectors
 
-accept(request, car, context, arrival):
-  if car.max_seats < 6: reject("SEATS")
-  if not car.can_route(arrival.in, arrival.out): reject("TRACK_ROUTE")
-  if need stamp and missing from context: reject("CONTEXT")
-  return ok
+// Inspect — BUILD_SPEC shape: setup, tasking+[candidate], request, liveData → Task[] | Failure
+inspect(setup, tasking, request, liveData):
+  // candidate Task carries input/output/context from Coupler path
+  if setup.max_seats < 6: fail("SEATS")
+  if not can_route(candidate.input, candidate.output): fail("TRACK_ROUTE")
+  if need stamp and missing from candidate.context: fail("CONTEXT")
+  return updated Task[]   // may extend Task.context for downstream
 ```
 
-| Car | seats | prefilter | accept (examples) |
-|-----|-------|-----------|-------------------|
-| N-04 | 8 | pass → A* goal | may fail stamp on short path; may pass after Y2 |
+| Station | seats | prefilter | inspect (examples) |
+|---------|-------|-----------|-------------------|
+| N-04 | 8 | pass → multi-sink goal | may fail stamp on short path; may pass after Y2 |
 | N-08 | 4 | **fail SEATS** — never a goal | never searched |
-| N-12 | 12 | pass → A* goal | may fail TRACK_ROUTE on some arrivals |
+| N-12 | 12 | pass → multi-sink goal | may fail TRACK_ROUTE on some arrivals |
 
-### 4.3 What goes in which stage (checklist for new Classes)
+### 4.3 What goes in which stage (checklist for new StationTypes)
 
 **prefilter-safe:** max capability, offline, hard firmware/protocol “never”, Setup impossible, facts already required from **prior binds** and already known missing.  
-**accept-only:** path stamps, arrival track pair, isolation vs path, anything that depends on **how** you got there.
+**inspect-only:** path stamps, arrival track pair, isolation vs path, anything that depends on **how** you got there.
 
 ---
 
@@ -176,7 +184,7 @@ accept(request, car, context, arrival):
 - **Nodes:** ports `(device_id, side, track_id)` (or equivalent expand state).  
 - **Edges:**  
   - **Cables:** out-track of A → in-track of B  
-  - **Internal:** legal `(in→out)` on same Yard/Car per type map  
+  - **Internal:** legal `(in→out)` on same Station per type `legalPairs`  
 - **Hop key:** `(device_id, in_track, out_track)` — unique on a Booking route (anti-loop).  
 - **Re-entry allowed:** same Yard twice if hop_key differs (`1:Y1:1` then later `5:Y1:6`).
 
@@ -195,7 +203,7 @@ accept(request, car, context, arrival):
 ### 5.3 Two reasons for multi-Yard / loopback
 
 1. **Track map:** short internal pair illegal (e.g. cannot `1→6` on Y1).  
-2. **Context:** short cable exists, but `accept` fails until a Yard hop publishes a fact (e.g. Y2 stamp).
+2. **Context:** short Link exists, but **inspect** fails until a transparent hop’s Inspector writes a fact into Task.context (e.g. Y2 stamp).
 
 Both can apply on one Booking.
 
@@ -219,7 +227,7 @@ Re-resolve with same legs and valid world → **identical** assignment, no re-Se
 
 Cache failure + reason under a **hopeful** token.  
 **Do not** bust UNSAT only because someone else claimed more capacity (world tighter).  
-**Do** bust on: release, topology expand, setup unlock, new Car online, policy loosen, legs edit.
+**Do** bust on: release, topology expand, setup unlock, new Station online, policy loosen, legs edit.
 
 ### 6.4 Why
 
@@ -234,15 +242,15 @@ Fail at the **first pipeline stage** that emptied options; do not dump A* open s
 **Pipeline:**
 
 ```text
-Catalog → prefilter → (Coupler: geometry / capacity / budget) → accept at goal
+Catalog → prefilter → (Coupler: geometry / capacity / budget) → inspect at goal (and transparent visits)
 ```
 
-**Codes (stable):**  
-`NO_CANDIDATES`, `INSPECTOR_REJECT` / accept samples, `ALL_BUSY`, `UNREACHABLE`, `CAPACITY_BLOCKED`, `BUDGET`, `CONTEXT_DEAD_END`, `POLICY`.
+**Codes (stable) — canonical names from BUILD_SPEC §9.3:**  
+`NO_CANDIDATES`, `INSPECT_FAIL` (alias: `INSPECTOR_REJECT`), `ALL_BUSY`, `UNREACHABLE`, `CAPACITY` (alias: `CAPACITY_BLOCKED`), `BUDGET`, `CONTEXT_DEAD_END`, `POLICY`.
 
-**Checkpoints:** later failures scoped to locked Cars (“failed under R-17”). Not proof another Car would work until reopen.
+**Checkpoints:** later failures scoped to locked Stations (“failed under R-17”). Not proof another Station would work until reopen.
 
-**Explainability:** optional Coupler debug log of failed goal arrivals (short path tries) for operators — still not Assembler round-trips.
+**Explainability:** optional Coupler debug log of failed goal arrivals (short path tries) for operators — still not Assembler within-segment round-trips.
 
 ---
 
@@ -257,7 +265,7 @@ Levers:
 1. Sticky / negative cache  
 2. prefilter shrinks goals  
 3. Checkpoint closes Classes  
-4. **One multi-sink search per segment** (not one A* per Car)  
+4. **One multi-sink search per segment** (not one A* per Station / target)  
 5. Oracle optimistic reachability + A* heuristic  
 6. Hard caps: H hops, V visits/yard, max expansions, wall clock  
 7. hop_key anti-loop  
@@ -279,7 +287,7 @@ R ──► Y1 ──┬── N-04 ──► D
 ```
 
 - No out-port multiplex; illegal Y1 `1→6` so N-12 needs loopback re-entry.  
-- Y2 `publish_on_hop: clearance.y2_stamp`.  
+- Y2 Inspector may write `clearance.y2_stamp` into Task.context on visit.  
 - Interactive scenarios: simple, multiyard (Y2→N-04 free), **loopback** (useful re-entry + anti-spin guards / G1·G2), prefilter, nosol, sticky.  
 - Offline assets: `docs/vendor/cytoscape.min.js`, `mermaid.min.js`.
 
@@ -314,7 +322,7 @@ Consumers apply events into a **projected world state** (same entities as the da
 |------------|-------------------|
 | **Classes / catalog** | New Class, Setup allowed, Inspector policy flags |
 | **Cars** | Online/offline, Setup armed, config blob, capacity |
-| **Fabric** | Cables add/remove, Yard maps, Yard online, publish_on_hop |
+| **Fabric** | Links add/remove, transparent maps, Station/Link online, Inspector context rules |
 | **Bookings / demand** | New Booking, legs edited, cancel, priority |
 | **External occupancy** (if any) | Claims held by other systems |
 
@@ -348,7 +356,7 @@ After a successful (or updated) resolve, publish **intentions** other services e
 | Output | Meaning |
 |--------|---------|
 | **Claims** | Which Cars, hop_keys / tracks / cables this Booking holds |
-| **Setups** | Which Setup each used Car (and Yard if applicable) should arm |
+| **Setups** | Which Setup each used Station (including transparent) should arm |
 | **Route / hop list** (optional) | Full plan for audit/ops |
 | **UNSAT / failure** (optional topic or same topic with status) | Why a Booking cannot be placed |
 
@@ -362,8 +370,8 @@ in:  bookings.commands  (create/update/cancel)
 in:  occupancy.events   (optional external claims)
 
 out: bookings.plans     (status sat|unsat, consist, route summary)
-out: claims.commands    (claim/release Car + hop resources)
-out: setups.commands    (arm Setup on Car/Yard)
+out: claims.commands    (claim/release Station + hop resources)
+out: setups.commands    (arm Setup on Station)
 ```
 
 Exact names/schemas = platform standard (Avro/Protobuf/JSON). **Not implemented in engine v1.**
@@ -389,19 +397,19 @@ This expands the design-doc “What else to document” list into **actionable w
 
 | # | Work package | Purpose | Minimum content | Status |
 |---|--------------|---------|-----------------|--------|
-| W1 | **Canonical data model** | Shared types | Entities in BUILD_SPEC §3; invariants (route may repeat Yard; hop_key unique) | **Done in BUILD_SPEC** — confirm extras (only Car+Yard?) |
+| W1 | **Canonical data model** | Shared types | Entities in BUILD_SPEC §3; invariants (route may re-enter station with new hop_key) | **Done in BUILD_SPEC** |
 | W2 | **Resolve API** | Service boundary | PUT booking, POST resolve/release, FailureReport, force, sticky flags | **Done in BUILD_SPEC §9** — choose HTTP vs library only |
 | W3 | **Policy registry** | Tunables without code change | H, V, expansions, wall_ms, first_fit, checkpoint overrides | **Done defaults §7** — confirm numbers |
-| W4 | **Inspector SPI + guide** | New Classes without engine rewrite | prefilter/accept/publish/required_path_facts; seats vs TRACK_ROUTE example | **Done SPI §5** — **need production Class schemas** |
+| W4 | **Inspector SPI + guide** | New StationTypes without engine rewrite | prefilter/inspect; seats vs TRACK_ROUTE example; context keys via Inspector | **Done SPI BUILD_SPEC §5** — **need production StationType schemas** |
 | W5 | **Yard type catalog** | Fabric rules | direct/agg/expand/restricted/full + capacity | **Done exclusive v1** — OPEN combine |
 | W6 | **Fact / Context schema** | Inter-leg + path facts | Namespacing, FactPatch, who publishes when | **Done §4** — **enumerate real stamps/Yards** |
 | W7 | **Concurrency & claims** | Multi-Booking safety | Txn, lock order, hard claim on SAT | **Done §11** |
 | W8 | **Golden tests G1–G12** | Prevent regressions | Toy topology + behaviors listed in BUILD_SPEC | **Specified** — implement with code |
 | W9 | **Observability** | Ops | sticky_hit, expansions p99, fail codes | **Specified §12** |
 | W10 | **Non-goals / threats / phases** | Scope control | P0–P6, edge cases | **Done §2,14,15** |
-| W11 | **Coupler explain log** | Debug multi-Yard tries | Structured “goal reject” events (path summary, accept code) | **Not written** — recommend for ops |
+| W11 | **Coupler explain log** | Debug multi-switch tries | Structured “goal reject” events (path summary, inspect code) | **Not written** — recommend for ops |
 | W12 | **Cost model details** | Yard-bias, re-Setup penalty | Numeric weights, piggyback ranking formula | **Partial** — defaults only |
-| W13 | **Oracle design** | Scale | What is precomputed, invalidation on topology change | **Partial** — optional phase |
+| W13 | **Oracle++ design** | Scale | Reach next type, between non-transparent types, to terminal; hop `h`; topology rebuild | **DECIDED intent** BUILD_SPEC §3.7 — index shape engineering |
 | W14 | **Real Class catalog** | Production | Each Class: request JSON schema, prefilter rules, accept rules, facts, path facts, checkpoint | **OPEN — product** |
 | W15 | **Migration bridge** | Legacy names | Optional map only; rail terms in new code | **Optional** |
 | W16 | **Kotlin service skeleton** | Ship | packages: catalog, inspectors, fabric, coupler, assembler, reserve, cache, api, fixtures | **Not started** |
@@ -420,14 +428,14 @@ Each item: decision needed, options, recommendation, impact if wrong.
 - **Options:** exclusive hop/Ag; soft share with physics rules; scheduled mutex.  
 - **DEFAULT v1:** exclusive.  
 - **Discuss if:** real fabric allows multi-Booking combine on Ag.  
-- **Impact:** reservation model, CAPACITY_BLOCKED rates.
+- **Impact:** reservation model, `CAPACITY` rates.
 
-### Q2. Backtrack when checkpoint blocks later leg?
+### Q2. Backtrack when a later leg fails? — **RESOLVED**
 
-- **Options:** 0 (fail + report); reopen last Class; full backtrack.  
-- **DEFAULT v1:** 0.  
-- **Discuss if:** success rate too low with first-fit + checkpoint.  
-- **Impact:** complexity, reconfig cost if reopen forces re-Setup.
+- **Was:** DEFAULT depth 0 (fail + report only).  
+- **DECIDED (BUILD_SPEC §3.9d C2b, P1 required):** inter-leg backtrack **up to the last Checkpoint**; never reopen a checkpointed StationType. Alts retained until checkpoint (C2c).  
+- **Required** in v1 / P1 Assembler (not optional).  
+- **Impact:** Assembler alt stack + restore working overlay; budgets/heuristics still critical.
 
 ### Q3. First-fit vs best of K goals / paths?
 
@@ -436,26 +444,24 @@ Each item: decision needed, options, recommendation, impact if wrong.
 - **Discuss if:** path quality / load balance matters more than latency.  
 - **Impact:** Coupler runtime.
 
-### Q4. First Class leg: bind without fabric?
+### Q4. First Class leg: bind without fabric? — **RESOLVED / SUPERSEDED**
 
-- **Options:** bind only; always attach via headend Yard; virtual source.  
-- **DEFAULT v1:** bind only if no tail.  
-- **Discuss if:** production always has a fixed headend.  
-- **Impact:** first Coupler call index.
+- **Was (stale):** bind only if no tail (Inspector-only first leg).  
+- **DECIDED (see §3.1, BUILD_SPEC §3.7 / §8.1b):** first leg always goes through **virtual S0 → multi-sink Coupler** — **not** Inspector-only bind without fabric. First StationType inputs are unused; Coupler picks a start Station via S0 edges + inspect.  
+- **Do not implement** the old “bind only if no tail” default.
 
 ### Q5. Path Context in Coupler state
 
 - **Options:** `(port, context)` always; waypoints from `required_path_facts`; pseudo-legs.  
-- **DEFAULT v1:** context in Coupler state + publish_on_hop on expand.  
+- **DEFAULT v1 / DECIDED in BUILD_SPEC:** context in Coupler state as `(port, context)`; keys written only by **Inspector** on visit.  
 - **Discuss if:** state explosion too large — then waypoints.  
-- **Impact:** correctness of multi-Yard stamp discovery.
+- **Impact:** correctness of multi-switch stamp discovery.
 
-### Q6. Which Yards publish which facts?
+### Q6. Who writes path facts into Task.context? — **RESOLVED**
 
-- **Options:** empty default; instance lists; type-level templates.  
-- **DEFAULT v1:** instance `publish_on_hop`.  
-- **Discuss:** production catalog.  
-- **Impact:** which paths can unlock accept().
+- **Was:** separate `publish_on_hop` lists on yards/instances.  
+- **DECIDED (BUILD_SPEC §4.2):** **Inspector is the only writer** of Task.context keys (optional per type; not every inspect writes). No `publish_on_hop` registry.  
+- **Impact:** transparent visit = candidate Task + inspect; stamps appear when that Inspector writes them.
 
 ### Q7. UNSAT invalidation granularity
 
@@ -485,9 +491,9 @@ Each item: decision needed, options, recommendation, impact if wrong.
 
 ### Q11. Should Coupler expose debug “failed arrivals” in FailureReport?
 
-- **DEFAULT:** optional samples (path summary + accept code), capped.  
+- **DEFAULT / DECIDED:** optional capped samples (path summary + inspect code).  
 - **Discuss:** PII/ops needs.  
-- **Impact:** explainability of multi-Yard discovery.
+- **Impact:** explainability of multi-switch discovery.
 
 ### Q12. Language / deploy
 
@@ -525,9 +531,9 @@ Each item: decision needed, options, recommendation, impact if wrong.
 |-----------|--------|
 | Place queue: priority 1 first, then FCFS **submitTime** | **Yes** |
 | **Priority steal / plan re-place:** higher-priority booking **SAT-commits** at time event T and takes a station; lower-priority booking is **re-placed in the same engine run** for affected slices (multi planSegments) | **Yes** (§3.9b) — scheduling repair, logged as normal re-resolve |
-| **Force priority** API flag: treat lower-priority holders as preemptable even without a clean place-first pass; eviction cascade/audit | **OPEN** — strawman below; **do not implement** until designed |
+| **Force priority** API flag: treat lower-priority holders as preemptable even without a clean place-first pass; eviction cascade/audit | **Sole deferred** — strawman below; **do not implement** until designed |
 
-**This force-kick mode needs more design before coding.** Strawman only:
+**This force-kick mode is the only product feature we are not building yet.** Needs more design before coding. Strawman only:
 
 #### Modes
 
@@ -600,30 +606,33 @@ resolve(booking, forcePriority=false):
 
 | Decision | Choice |
 |----------|--------|
-| Vocabulary | Rail: Class, Car, Yard, Booking, … |
+| Vocabulary | StationType, Station, Track, Link, Booking, Route (rail cover) |
 | Architecture | Assembler outer + Coupler inner |
-| Coupler unit of work | One segment between two Classes; early success or exhaust |
-| Failed path tries | Inside Coupler only |
+| Coupler unit of work | **Option A multi-sink** — one `couple(goals)` per segment; pivot doc if revisit B |
+| Failed path / inspect tries | Inside Coupler only (same open set); inter-leg backtrack to last Checkpoint (C2b/c) |
+| First leg | Virtual S0 → multi-sink Coupler (not Inspector-only) |
+| Oracle++ | Topology reachability next type + non-transparent chain + terminal |
 | Path graph | Ports + hop_key, not device-only |
 | Re-entry | Allowed on different hop_keys |
 | Quality | Sub-optimal OK (first-fit, class-once) |
 | Determinism + sticky | Required (reconfig cost) |
 | UNSAT cache | Hopeful invalidation, not every claim |
-| Inspector split | prefilter (Assembler) + accept (Coupler goal) |
-| Seats example | prefilter seats; accept track route + stamps |
+| Inspector split | prefilter (Assembler) + inspect (Coupler goal) |
+| Seats example | prefilter seats; inspect track route + stamps |
 | Path context discovery | Goal-reject + continue; don’t hardcode Yard names in Inspector |
 | Prefer short path to Class | Cost bias, not hard rule |
 | Stack | Kotlin preferred |
 | IO shape | Kafka in (world/demand) → resolve when needed → Kafka out (claims, setups, plans) |
 | Kafka in v1 engine | **Not required** — pure domain + goldens first; adapters later |
-| Booking priority / force kick | **OPEN (Q16)** — field may exist; force preemption not in v1 engine; needs eviction design |
+| Booking priority place + same-run re-place | **In v1** |
+| Force-kick preemption (`forcePriority`) | **Sole deferred** — SPEC Q16; not building yet |
 | Docs | SPEC (this) + BUILD_SPEC + interactive HTML offline |
 
 ---
 
 ## 14. Suggested next session agenda
 
-1. Confirm/override **§12 OPEN** defaults (especially Q1, Q2, Q4, Q8, Q9).  
+1. Confirm/override **§12 OPEN** defaults (especially Q1, Q2, Q8, Q9; **Q4 resolved** — virtual S0).  
 2. Draft **W14** production Class table (even incomplete).  
 3. Implement **P0–P2** per BUILD_SPEC (Coupler → Assembler+prefilter → path Context).  
 4. Port goldens G1–G12 on toy topology.  
@@ -636,9 +645,9 @@ resolve(booking, forcePriority=false):
 
 1. Device-level Dijkstra without tracks.  
 2. Assembler round-trip per failed path.  
-3. Full accept at Assembler that drops cars for missing path-only facts.  
-4. Closed-set by port alone after accept-reject (blocks later stamped arrival).  
-5. “Never visit Yard twice.”  
+3. Full inspect at Assembler that drops stations for missing path-only facts.  
+4. Closed-set by port alone after inspect-reject (blocks later stamped arrival).  
+5. “Never visit transparent station twice.” (re-entry on new hop_key is allowed)  
 6. Parallel assign all Classes then stitch.  
 7. Re-resolve all UNSAT on every process start without hopeful check.  
 8. Putting legacy names (asset, string, switch) in new Kotlin packages.
@@ -651,8 +660,9 @@ resolve(booking, forcePriority=false):
 docs/
   SPEC.md                         ← this handoff (full picture)
   BUILD_SPEC.md                   ← implementer contracts + goldens
+  COUPLER_OPTION_A_VS_B.md        ← multi-sink vs peel (v1 = A; pivot record)
   README.md                       ← index
-  booking-assembler-design.html   ← interactive (prefilter/accept, multi-yard, …)
+  booking-assembler-design.html   ← interactive (prefilter/inspect, multi-yard, …)
   FIXTURE_STUDIO.md               ← topology + booking golden UI (design only)
   vendor/                         ← cytoscape + mermaid (offline)
 ```
@@ -660,4 +670,4 @@ docs/
 
 ---
 
-*End of Consist SPEC. When in doubt: Assembler owns Booking/Class state; Coupler owns one fabric segment; prefilter is cheap and path-blind; accept is thorough and path-aware; sticky beats re-search when the world has not hopefully improved.*
+*End of Trackplan SPEC. When in doubt: Assembler owns Booking/StationType state; Coupler owns one fabric segment; prefilter is cheap and path-blind; inspect is thorough and path-aware; sticky beats re-search when the world has not hopefully improved.*

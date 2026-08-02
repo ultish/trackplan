@@ -1037,7 +1037,8 @@
             <td><strong>Inspector</strong></td>
             <td>
               Per-StationType: <code>inspect(setup, tasking, request, liveData) → Task[] | Failure</code>.
-              Full assign when Coupler peels a candidate Task (path context already seeded on the Task).
+              Full assign when Coupler tries a candidate Task at a multi-sink goal or transparent hop
+              (path context already seeded on the Task). <strong>Sole writer</strong> of Task.context.
             </td>
           </tr>
           <tr>
@@ -1055,29 +1056,30 @@
           <tr>
             <td><strong>Context</strong></td>
             <td>
-              Per-<strong>Task</strong> map of path/comms facts (accumulates hop to hop). Inspectors write/extend keys.
-              Transparent stations on the path can publish facts (e.g. Y2 stamp) that later inspect needs.
+              Per-<strong>Task</strong> map of path/comms facts. <strong>Inspector only</strong> writes/extends keys
+              (Coupler seeds the next candidate from the previous accepted Task.context). Transparent: inspect
+              <strong>every visit</strong> (C2d) — e.g. Y2 Inspector may set <code>clearance.y2_stamp</code> for later legs.
             </td>
           </tr>
           <tr>
             <td><strong>Checkpoint</strong></td>
-            <td>StationType heuristic: after bind, do not try other stations of that type (type-once). Timing: DEFAULT after next non-transparent leg succeeds.</td>
+            <td>StationType type-once: do not try other Stations of that type. <strong>DECIDED</strong> timing: only after the <strong>next non-transparent</strong> StationType has a successful working Task (or last leg SAT). Alts kept until then.</td>
           </tr>
           <tr>
             <td><strong>Assembler</strong></td>
-            <td>Outer engine: legs, Prefilter candidates, agenda/alts, checkpoints, sticky, incremental re-resolve, whole-Booking commit.</td>
+            <td>Outer engine: legs, Prefilter candidates, Oracle++ goals/alts, checkpoints, sticky, incremental re-resolve, whole-Booking commit. Serial per booking in a run (v1).</td>
           </tr>
           <tr>
             <td><strong>Coupler</strong></td>
-            <td>Inner engine: path between leg endpoints on Stations + Tracks + Links; edgeCost + NeighborRank; transparent path fillers.</td>
+            <td>Inner engine: one multi-sink <code>couple(tail, goals)</code> per segment on Stations + Tracks + Links; edgeCost + NeighborRank; transparent path fillers (inspect every hop).</td>
           </tr>
           <tr>
-            <td><strong>Oracle</strong></td>
-            <td>Precomputed hop-count reachability on the online Link graph for A* <code>h</code> and goal prune. Rebuild on topology change, not tasking.</td>
+            <td><strong>Oracle++</strong></td>
+            <td>Topology insight: reachability / terminal (and chain) filters for multi-sink <strong>goals</strong>; hop-count is <code>h</code> only for A*. Rebuild on topology change, not tasking. (Legacy “Oracle” = Oracle++ unless only <code>h</code>.)</td>
           </tr>
           <tr>
-            <td><strong>Agenda</strong></td>
-            <td>Assembler-owned sorted targets (e.g. finishes on next type); peel → Coupler path → inspect when peeled; keep alts if later leg fails.</td>
+            <td><strong>Agenda / goals</strong></td>
+            <td>Assembler-owned sorted multi-sink targets (finishes of next type, Oracle++-filtered). One <code>Coupler.couple(tail, goals)</code>; inspect fails stay inside the open set. Unused goals = alts until the type is checkpointed.</td>
           </tr>
           <tr>
             <td><strong>Sticky / hopeful token</strong></td>
@@ -1116,7 +1118,7 @@
             <td>World config; rare changes</td>
             <td>Booking authoring</td>
             <td>Assembler, before Coupler goals</td>
-            <td>Coupler / agenda peel at candidate station</td>
+            <td>Coupler at goal Station or every transparent visit</td>
           </tr>
         </tbody>
       </table>
@@ -1149,10 +1151,11 @@
       <h2 id="big-picture">Big picture</h2>
       <p>
         A Booking is ordered <strong>demand legs</strong> (non-transparent StationTypes only).
-        Assembler binds Stations for each leg; Coupler fills transparent path stations
-        (switches) and Links between them. After resolve the user may see a full
-        <strong>Route</strong>: <code>R-17 → Y1 → N-04 → D-02</code>. Tasks on stations
-        carry path <strong>context</strong> that later legs may require.
+        Assembler builds multi-sink goals and calls <code>Coupler.couple(tail, goals)</code>
+        once per segment (first leg: virtual <strong>S0</strong>). Coupler fills transparent
+        path stations (switches) and Links. After resolve the user may see a full
+        <strong>Route</strong>: <code>R-17 → Y1 → Y2 → N-04 → D-02</code>. Task.context
+        (Inspector-written) may require facts from earlier hops (e.g. Y2 stamp).
       </p>
 
       <div class="mermaid">
@@ -1165,21 +1168,25 @@ flowchart TB
   end
 
   subgraph outer["Assembler — outer"]
-    P1["Bind Station · Task context · Checkpoint?"]
-    P2["Bind Station · Task context · Checkpoint?"]
-    P3["Bind Station · whole-Booking commit"]
+    A0["Prefilter + Oracle++ goals · tail"]
+    A1["Apply result · tail = Task.output out-track · alts"]
+    A2["Checkpoint prior type when next non-transparent OK"]
+    A3["Whole-Booking commit on SAT"]
   end
 
-  subgraph inner["Coupler — inner A*/BFS"]
-    C1["Links + transparent Stations"]
-    C2["Links + transparent Stations"]
+  subgraph inner["Coupler — multi-sink couple per segment"]
+    C0["couple S0 → Refrigerated goals"]
+    C1["couple tail R-out → Normal goals"]
+    C2["couple tail N-out → Docking goals"]
   end
 
-  L1 --> P1
-  P1 --> C1
-  C1 --> P2
-  P2 --> C2
-  C2 --> P3
+  L1 --> A0
+  A0 --> C0
+  C0 --> A1
+  A1 --> C1
+  C1 --> A2
+  A2 --> C2
+  C2 --> A3
       </div>
 
       <div class="svg-wrap" aria-hidden="true">
@@ -1304,8 +1311,8 @@ flowchart TB
           <div class="viz-card" style="grid-column:1/-1;font-size:0.82rem;color:var(--muted)">
             <strong style="color:var(--text)">How to read panels:</strong>
             <span style="color:var(--class-a)"><strong>Prefilter</strong></span> = cheap Assembler screen (setup + request + liveData; e.g. seats &gt; 5).
-            <span style="color:var(--yard)"><strong>inspect</strong></span> = full <code>Inspector.inspect</code> at Coupler goal (tasking + path context + track pair).
-            <strong>One Coupler/A* call</strong> = whole segment tail→next demand StationType (transparent Stations inside). Assembler does not step switches as legs.
+            <span style="color:var(--yard)"><strong>inspect</strong></span> = full <code>Inspector.inspect</code> at multi-sink goals <em>and</em> every transparent visit (C2d; sole Task.context writer).
+            <strong>One multi-sink <code>couple(tail, goals)</code></strong> per segment (first leg: virtual S0 → first-type goals). Assembler does not peel targets or step switches as legs.
           </div>
           <div class="viz-card">
             <h4>Route / bindings (Assembler state)</h4>
@@ -1371,92 +1378,97 @@ flowchart TB
           <h3><span class="layer-tag outer">Outer</span> Assembler</h3>
           <p style="margin:0;max-width:none;font-size:0.9rem;color:var(--muted)">
             Walk demand legs in order (non-transparent StationTypes only).
-            For each leg: <strong>Prefilter</strong> stations → agenda of targets →
-            Coupler (or virtual source on first type) → <code>inspect</code> when peeled.
-            Bind, merge Task context, checkpoint timing, sticky/fail. Whole-Booking commit.
+            For each leg: <strong>Prefilter</strong> → Oracle++ filter/sort → multi-sink
+            <code>goals</code> → one <code>Coupler.couple(tail, goals)</code>
+            (first leg: virtual <strong>S0</strong>). Apply bind, tail = accepted Task.output out-track,
+            checkpoint timing (C2c), sticky/fail. Whole-Booking commit. Serial one booking at a time in a run (v1).
           </p>
         </div>
         <div class="panel">
           <h3><span class="layer-tag inner">Inner</span> Coupler</h3>
           <p style="margin:0;max-width:none;font-size:0.9rem;color:var(--muted)">
-            One segment: start = tail Station OUT tracks (or virtual S0 for first type),
-            goals = prefiltered stations of next type. Bounded multi-sink A* on
-            <strong>Stations + Tracks + Links</strong> with edgeCost + NeighborRank;
-            transparent stations are path fillers.
+            One segment: start = <strong>tail out-track</strong> (accepted Task.output, e.g. <code>R-17:out1</code>)
+            or virtual S0 for first type; goals = Oracle++-filtered finishes of next type.
+            Bounded multi-sink A* on <strong>Stations + Tracks + Links</strong> with edgeCost + NeighborRank;
+            transparent stations are path fillers — inspect <strong>every visit</strong> (C2d).
           </p>
         </div>
       </div>
 
       <div class="callout ok">
-        <strong>Contract:</strong> Assembler runs demand legs and Booking state.
-        Coupler finds <em>one successful path between two non-transparent types</em>
+        <strong>Contract (Option A — multi-sink):</strong> Assembler runs demand legs and Booking state.
+        One <code>couple(tail, goals)</code> per segment finds a successful path to <em>some</em> goal
         (any number of transparent stations in the middle) —
-        <strong>early return on success</strong>, or <strong>fail when search is exhausted</strong>.
-        Assembler does <em>not</em> get a callback after every failed path try.
+        <strong>first-fit inspect OK</strong>, or <strong>fail when open set / budget is exhausted</strong>.
+        Path/inspect fails stay inside Coupler; Assembler does <em>not</em> peel targets or re-call per goal.
       </div>
 
       <table>
         <thead>
-          <tr><th></th><th>Assembler</th><th>Coupler (A*/BFS)</th></tr>
+          <tr><th></th><th>Assembler</th><th>Coupler (multi-sink A*/BFS)</th></tr>
         </thead>
         <tbody>
           <tr>
             <td><strong>Main use</strong></td>
-            <td>Leg order, Prefilter candidates, agenda/alts, Task context, checkpoints, sticky, whole-Booking commit/fail</td>
-            <td>Fabric path from <em>tail Station</em> to <em>some next-type Station</em></td>
+            <td>Leg order, Prefilter + Oracle++ goals/alts, Task context copy, checkpoints, sticky, whole-Booking commit/fail</td>
+            <td>Fabric path from <em>tail out-track</em> (or S0) to <em>some next-type goal</em></td>
           </tr>
           <tr>
             <td><strong>How often they talk</strong></td>
-            <td>Once per type→type segment (first type: virtual source, no inbound Link required)</td>
+            <td>~One couple per segment (first type: S0 multi-sink, no inbound Link / no input track used)</td>
             <td>Many expansions <em>inside</em> one call; <strong>one</strong> return to Assembler</td>
           </tr>
           <tr>
             <td><strong>Success</strong></td>
-            <td>Bind station, append <em>full</em> hop list from Coupler; last type often no OUT needed</td>
-            <td>Early return: path + station when goal + inspect OK</td>
+            <td>Bind station, append <em>full</em> hop list; tail = Task.output out-track; last type often no OUT</td>
+            <td>Early return: path + station when goal + inspect OK (first-fit)</td>
           </tr>
           <tr>
             <td><strong>Failure</strong></td>
-            <td>Booking UNSAT at this leg; discard working overlay</td>
-            <td>Open set empty / budget — no acceptable path</td>
+            <td>May backtrack to last Checkpoint (C2b); else Booking UNSAT; discard working overlay</td>
+            <td>Open set empty / budget — no acceptable path among goals</td>
           </tr>
           <tr>
             <td><strong>Transparent</strong></td>
             <td>Never steps transparent types as demand legs</td>
-            <td>0..many transparent hops between demand Stations</td>
+            <td>0..many transparent hops; Inspector on every visit</td>
           </tr>
           <tr>
             <td><strong>Wrong</strong></td>
-            <td colspan="2">A* returns R→Y1→N4 → Assembler inspect-fails → Assembler starts a <em>new</em> A* for R→Y2→N4</td>
+            <td colspan="2">Assembler peels targets with <code>while agenda</code> / <code>Coupler.find(tail→target)</code> (Option B — not v1)</td>
           </tr>
           <tr>
             <td><strong>Right</strong></td>
-            <td colspan="2">Short-path fail, other N tries, Y2 discovery all happen <em>inside one</em> couple(); Assembler only sees final success or total fail</td>
+            <td colspan="2">Short-path fail, other N tries, Y2 discovery all happen <em>inside one</em> <code>couple()</code>; Assembler only sees final success or total fail</td>
           </tr>
         </tbody>
       </table>
 
-      <pre>// Assembler control flow (sketch)
-for each demand leg (non-transparent StationType):
-  candidates = Prefilter(setup, request, liveData) + rank / Oracle
-  if first leg:
-    // virtual source S0 → each candidate; no inbound Link; no input track used
-    bind start Station (Coupler/inspect entry-special)
+      <pre>// Assembler control flow (sketch) — Option A multi-sink only
+for each demand leg (non-transparent StationType T_i):
+  pool = Prefilter(setup, request, liveData)
+  goals = sort(Oracle++ filter(pool))   // reachable from tail + terminal/chain
+  if empty: UNSAT (NO_CANDIDATES / UNREACHABLE)
+  // first leg: tail = virtual S0 (no inbound Link; no input track used on start Stations)
+  // later legs: tail = previous accepted Task.output out-track (e.g. R-17:out1)
+  result = Coupler.couple(tail, goals=goals, working, inspector, request, caps)
+  // inspect / path fails stay inside Coupler open set; first OK wins (first-fit)
+  if fail:
+    // may backtrack to last Checkpoint (C2b) and retry with remaining alts
+    // never reopen already-checkpointed StationTypes
+    discard working overlay; Booking UNSAT
   else:
-    agenda = sort(targets on candidates)  // edgeCost, NeighborRank, track
-    while agenda:
-      path = Coupler.find(tail → target)
-      if path && inspect(setup, tasking+candidate, request, liveData) OK:
-        bind; route += hops; continue booking
-    if fail: discard working overlay; Booking UNSAT
+    bind; route += hops; tail = Task.output out-track
+    // unused goals → alts until type is checkpointed
+    // checkpoint prior type only after this non-transparent leg OK (or last-leg SAT)
 
 
-// Coupler — one segment only
-couple(start_tracks | S0, goal_stations, working_tasking):
-  multi-sink A*  f = g(edgeCost) + h(Oracle hop-count)
-  expand via Links + legal in→out on transparent Stations
-  on reach goal: try inspect once; fail → continue search
-  exhausted/budget → failure
+// Coupler — one multi-sink segment
+couple(tail_out_track | S0, goals, working_tasking):
+  multi-sink A*  f = g(edgeCost) + h(hop-count to nearest remaining goal)
+  expand via Links + legal in→out; transparent: inspect every visit (may extend Task.context)
+  on reach goal: try inspect; fail → continue search (goal stays rejected on this path only)
+  first inspect-OK goal → return; exhausted/budget → failure
 </pre>
 
       <div class="callout">
@@ -1481,11 +1493,11 @@ couple(start_tracks | S0, goal_stations, working_tasking):
         <thead><tr><th>Memory</th><th>Feeds into</th></tr></thead>
         <tbody>
           <tr><td>Bindings (Stations used)</td><td>Plan + sticky replay</td></tr>
-          <tr><td>Task context (accumulating)</td><td>Downstream inspect / Prefilter where safe</td></tr>
-          <tr><td>Tail OUT track of last bound station</td><td><strong>Start</strong> of next Coupler run</td></tr>
+          <tr><td>Latest accepted Task.context (copy)</td><td>Seed next candidate Task; Inspector writes keys</td></tr>
+          <tr><td>Tail = accepted Task.output <strong>out-track</strong></td><td><strong>Start</strong> of next <code>couple()</code> (never Station alone)</td></tr>
           <tr><td>Route hops so far</td><td>Full Booking route (user-visible)</td></tr>
-          <tr><td>Checkpoints (closed StationTypes)</td><td>Cull other stations of that type</td></tr>
-          <tr><td>Agenda alts</td><td>Peel next target if later leg fails under working overlay</td></tr>
+          <tr><td>Checkpoints (closed StationTypes)</td><td>Cull other Stations of that type; backtrack floor (C2b)</td></tr>
+          <tr><td>Agenda alts (unused multi-sink goals)</td><td>Retained until type checkpointed; used if later leg fails and we backtrack to last Checkpoint</td></tr>
         </tbody>
       </table>
 
@@ -1495,14 +1507,18 @@ couple(start_tracks | S0, goal_stations, working_tasking):
         freely assign all StationTypes in parallel and join paths afterward.
         Parallelism is fine <em>inside</em> a leg (Prefilter/rank) or inside Coupler
         precompute — not across legs as independent solves.
+        <strong>v1:</strong> one booking at a time in a run; no force-kick of exclusive holds without a full re-plan pass.
       </p>
 
       <h3>Checkpointed StationTypes</h3>
       <p>
-        When a StationType is checkpointed (type-once), binding a Station freezes that type
-        for the Booking. DEFAULT timing: after the <strong>next</strong> non-transparent leg
-        has a successful working Task (or last leg at full SAT). Failures <strong>after</strong>
-        that lock are reported as conditional:
+        When a StationType is checkpointed (type-once), its bound Station freezes for the Booking —
+        other Stations of that type are never tried again on this resolve.
+        <strong>DECIDED timing (C2c):</strong> checkpoint type T only after the
+        <strong>next non-transparent</strong> leg has a successful working Task
+        (or T is last leg and booking is SAT). Do <em>not</em> checkpoint Refrigerated
+        until Normal has a working Task; do not checkpoint Normal until Docking OK (or SAT).
+        Alts for T are kept until then. Failures <strong>after</strong> a lock are conditional:
       </p>
       <div class="callout warn">
         “Failed at Docking <strong>under checkpoint Refrigerated = R-17</strong>.
@@ -1515,20 +1531,23 @@ couple(start_tracks | S0, goal_stations, working_tasking):
         Each coupling segment is a path search on
         <strong>Stations + Tracks + Links</strong>, not on StationType labels alone.
         Dynamic <strong>edgeCost</strong> ranks legal neighbors; <strong>NeighborRank</strong>
-        (SmartNode) breaks ties; Oracle hop-count supplies optimistic <code>h</code>.
+        (SmartNode) breaks ties; hop-count <code>h</code> (BFS on online Links to nearest goal)
+        is optimistic and ignores tasking. Goal set is built by Assembler via
+        <strong>Oracle++</strong> (reachability + terminal/chain) before the call.
       </p>
 
-      <pre>// One leg's fabric search
-starts = tail OUT tracks (or virtual S0 → first-type candidates)
-goals  = prefiltered stations of next demand StationType
+      <pre>// One segment — Option A multi-sink (DECIDED)
+starts = tail OUT track (accepted Task.output) | virtual S0 → first-type goals
+goals  = Oracle++ filter(Prefilter pool of next demand StationType)
 
-search = A*  f = g(edgeCost) + h(Oracle min hops)
+search = A*  f = g(edgeCost) + h(hop-count to nearest remaining goal)
 // edgeCost may include hop baseline, transparent penalty, fill-first empty penalty
 
-until hit any goal OR budget exhausted:
+until first inspect-OK goal OR budget exhausted:
   expand via Links and legal in→out pairs on stations
+  transparent hop: inspect every visit (may write Task.context)
   prune: repeat hop_key, hop budget H, visits/station V, max expansions
-  at goal: inspect(setup, tasking+candidate, request, liveData)</pre>
+  at goal: inspect(setup, tasking+candidate, request, liveData); fail → continue</pre>
 
       <h3>Why multi-sink (not one A* per Station)</h3>
       <p>
@@ -1555,8 +1574,8 @@ until hit any goal OR budget exhausted:
       </table>
       <p>
         Both can combine on one Booking. Coupler state includes more than tracks:
-        <strong>hop path + Task context acquired along the path</strong>
-        (context seeds the candidate Task at each inspect).
+        <strong>hop path + Task.context flowing along the path</strong>
+        (seeded into the next candidate; Inspector is the only writer of durable keys).
       </p>
 
       <h3 id="anti-loop">Useful re-entry vs infinite loopback</h3>
@@ -1569,7 +1588,7 @@ until hit any goal OR budget exhausted:
       </p>
       <div class="callout">
         <strong>Rule of thumb:</strong> re-visit a station only when the
-        <code>hop_key = (stationId, in, out)</code> is new <em>or</em> path Context improved.
+        <code>hop_key = (stationId, in, out)</code> is new <em>or</em> Task.context improved (via Inspector).
         Same hop_key again = spin → prune. Still over-visit? Hard caps → <code>BUDGET</code>.
       </div>
       <table>
@@ -1674,12 +1693,12 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
           <tr>
             <td><strong>Checkpoint / type-once</strong></td>
             <td>Assembler</td>
-            <td>After bind (DEFAULT after next non-transparent succeeds), drop other Stations of that type. Sub-optimal by design; huge cull.</td>
+            <td>DECIDED: after next non-transparent succeeds (or last-leg SAT), drop other Stations of that type. Alts kept until then. Huge cull; sub-optimal by design.</td>
           </tr>
           <tr>
             <td><strong>First-fit on stable order</strong></td>
-            <td>Assembler agenda</td>
-            <td>Deterministic; sticky id first; no full optimality.</td>
+            <td>Coupler multi-sink / agenda sort</td>
+            <td>DECIDED first-fit: edgeCost, then NeighborRank, then track name. Sticky id preferred when equal. No full optimality.</td>
           </tr>
           <tr>
             <td><strong>Fill-first / edgeCost</strong></td>
@@ -1694,17 +1713,17 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
           <tr>
             <td><strong>Prefilter</strong></td>
             <td>Assembler</td>
-            <td>setup + request + liveData shrink goals before A* (no path context).</td>
+            <td>setup + request + liveData shrink pool before goals (no path context).</td>
           </tr>
           <tr>
             <td><strong>Multi-sink couple</strong></td>
             <td>Coupler</td>
-            <td>One fabric search per leg toward all candidates.</td>
+            <td>~One fabric search per segment toward all multi-sink goals (Option A).</td>
           </tr>
           <tr>
-            <td><strong>Oracle hop-count h</strong></td>
+            <td><strong>Oracle++ goals + hop-count h</strong></td>
             <td>Before / during Coupler</td>
-            <td>BFS distances on online Links; drop impossible goals; optimistic vs tasking.</td>
+            <td>Oracle++ filters goals (reachability + terminal/chain). <code>h</code> = BFS hop-count on online Links to nearest goal; optimistic vs tasking.</td>
           </tr>
           <tr>
             <td><strong>Hop / visit / expansion budgets</strong></td>
@@ -1724,14 +1743,16 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
       <p>
         Dominant cost is almost always:
       </p>
-      <pre>time ≈ Σ_legs ( candidates_tried × cost(couple_search) )</pre>
-      <p>Drive both factors down.</p>
+      <pre>time ≈ Σ_segments cost(one multi-sink couple_search)
+// ~1 couple per segment attempt (Option A) — not candidates_tried × couple
+// backtrack / reopen past last Checkpoint multiplies segments</pre>
+      <p>Drive expansions and goal-pool size down; keep one multi-sink search per segment.</p>
 
       <h3>Hot path</h3>
       <ol>
         <li><strong>Sticky hit</strong> → return cached plan (fastest).</li>
-        <li>Per leg: index by StationType → Prefilter → rank → Oracle prune → agenda.</li>
-        <li><strong>One</strong> multi-sink bounded A*/BFS (not one search per Station).</li>
+        <li>Per leg: index by StationType → Prefilter → rank → Oracle++ goal filter → goals.</li>
+        <li><strong>~One</strong> multi-sink bounded A*/BFS per segment (not one search per Station / target).</li>
         <li>Hard caps: <code>H</code>, <code>V</code>, <code>max_expansions</code>, wall clock.</li>
       </ol>
 
@@ -1755,7 +1776,7 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
 
       <div class="callout">
         Performance is an <strong>SLA + caps</strong> contract, not “run until optimal.”
-        Measure sticky hit rate, candidates entering Coupler, expansions/leg, oracle reject rate.
+        Measure sticky hit rate, goals entering Coupler, expansions/segment, Oracle++ reject rate.
       </div>
 
       <!-- ========== EXPLOSION ========== -->
@@ -1768,8 +1789,8 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
       <ul>
         <li>Track-level state + hop_key anti-loop</li>
         <li>H / V / max expansions</li>
-        <li>Oracle hop-count + A* h</li>
-        <li>Multi-sink; checkpoint; Prefilter prune</li>
+        <li>Oracle++ goal filter + hop-count <code>h</code></li>
+        <li>Multi-sink Option A; checkpoint; Prefilter prune</li>
         <li>Negative sticky so failed Bookings do not rescan when nothing hopeful changed</li>
       </ul>
 
@@ -1803,8 +1824,8 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
             <td>Two-level correctness.</td>
           </tr>
           <tr>
-            <td><strong>Incremental Oracle</strong></td>
-            <td>Update hop-count only for affected components on Link/online edit.</td>
+            <td><strong>Incremental Oracle++</strong></td>
+            <td>Update reachability / hop-count only for affected components on Link/online edit.</td>
             <td>Engineering cost.</td>
           </tr>
           <tr>
@@ -1818,14 +1839,9 @@ example:     5 : Y1 : 6     // enter switch Y1 on track 5, leave on 6</pre>
             <td>k× work.</td>
           </tr>
           <tr>
-            <td><strong>Lazy Coupler</strong></td>
-            <td>Only run A* for top-ranked agenda targets after Oracle; or stop at first goal in preference order.</td>
-            <td>Default we want.</td>
-          </tr>
-          <tr>
             <td><strong>Separate geometry vs tasking</strong></td>
-            <td>Oracle ignores tasking (optimistic); Coupler applies edgeCost / inspect — avoids constant Oracle rebuild.</td>
-            <td>Some false-positive couple attempts.</td>
+            <td>Oracle++ ignores tasking (optimistic); Coupler applies edgeCost / inspect — avoids constant topology rebuild.</td>
+            <td>Some false-positive couple expansions until inspect fails.</td>
           </tr>
         </tbody>
       </table>
@@ -1836,7 +1852,7 @@ flowchart LR
     I[StationType index]
     X[Prefilter]
     K[Checkpoint closed]
-    O[Oracle reachable?]
+    O[Oracle++ reachable?]
     I --> X --> K --> O
   end
   subgraph reduce_mesh["Cheaper fabric search"]
@@ -1859,7 +1875,7 @@ flowchart LR
       </p>
 
       <h3>Pipeline (explain at first zero)</h3>
-      <pre>Catalog → Prefilter(setup, request, liveData) → Oracle geometry → Coupler path → inspect(tasking) → Budget</pre>
+      <pre>Catalog → Prefilter(setup, request, liveData) → Oracle++ goals → Coupler multi-sink path → inspect(tasking) → Budget</pre>
       <p style="font-size:0.9rem;color:var(--muted)">
         Prefilter is path-independent; inspect carries Task context and provisional tasking.
         Prefer one structured reject reason from Prefilter/Inspector when possible,
@@ -1871,10 +1887,9 @@ flowchart LR
         <thead><tr><th>Code</th><th>When</th><th>User-facing gist</th></tr></thead>
         <tbody>
           <tr><td><code>NO_CANDIDATES</code></td><td>No Station passes Prefilter for this leg’s request</td><td>Nothing fits this leg given earlier locks</td></tr>
-          <tr><td><code>INSPECT_FAIL</code></td><td>Inspector rejected candidate Task(s) after path</td><td>e.g. missing context stamp / track pair illegal</td></tr>
-          <tr><td><code>CAPACITY</code> / busy</td><td>Matches exist but tasking/liveData blocks</td><td>Matching Stations all occupied</td></tr>
-          <tr><td><code>UNREACHABLE</code></td><td>Oracle: no geometry within H</td><td>No Link path to any matching Station</td></tr>
-          <tr><td><code>CAPACITY_BLOCKED</code></td><td>Geometry ok; hops/tracks busy</td><td>Paths blocked by other Bookings</td></tr>
+          <tr><td><code>INSPECT_FAIL</code></td><td>Inspector rejected candidate Task(s) after path (goals tried inside couple)</td><td>e.g. missing context stamp / track pair illegal</td></tr>
+          <tr><td><code>CAPACITY</code> <span style="color:var(--muted)">(aka CAPACITY_BLOCKED)</span></td><td>Matches exist but tasking/liveData or hop tracks busy</td><td>Stations occupied or Links held by other Bookings</td></tr>
+          <tr><td><code>UNREACHABLE</code></td><td>Oracle++: no geometry within H to any goal / terminal</td><td>No Link path to any matching Station</td></tr>
           <tr><td><code>BUDGET</code></td><td>Hit expansion/hop limits</td><td>No path within search limits</td></tr>
           <tr><td><code>CONTEXT_DEAD_END</code></td><td>Checkpoints make later legs impossible</td><td>Earlier Station choices leave no continuation</td></tr>
           <tr><td><code>POLICY</code></td><td>Rule forbids combination</td><td>Disallowed by policy</td></tr>
@@ -1884,12 +1899,15 @@ flowchart LR
       <h3>Failure report shape</h3>
       <pre>{
   status: "UNSAT",
-  failed_leg: 3,
-  code: "CAPACITY_BLOCKED",
-  summary: "…",
+  code: "CAPACITY",
+  legIndex: 2,                    // 0-based demand leg; null if whole-booking
+  message: "N→D Links held by B-88",
+  stationId: "N-04",
+  pathTaken: [ /* hops */ ],
+  // optional debug / product extras:
   checkpoints: [
-    { leg: 1, stationType: "Refrigerated", station: "R-17" },
-    { leg: 2, stationType: "Normal", station: "N-04" }
+    { leg: 0, stationType: "Refrigerated", station: "R-17" }
+    // Normal not yet checkpointed — Docking failed before next-OK lock
   ],
   counts: {
     candidates_before_prefilter: 40,
@@ -1897,8 +1915,7 @@ flowchart LR
     oracle_ok: 3
   },
   blockers: [ { booking: "B-88", hop: "5:Y1:6" } ],
-  pathTaken: [ /* hops */ ],
-  suggestions: [ "Release B-88", "Reopen checkpoint on Normal" ]
+  suggestions: [ "Release B-88", "Wait for capacity" ]
 }</pre>
 
       <p>
@@ -1948,7 +1965,7 @@ flowchart LR
         <strong><code>docs/BUILD_SPEC.md</code></strong> — primary build contract for <strong>Trackplan</strong> (v1).
         Status tags: <strong>DECIDED</strong> / <strong>DEFAULT</strong> / <strong>OPEN</strong>.
         Includes Station model, Prefilter + Inspector, transparent types, Assembler + Coupler,
-        edgeCost / NeighborRank / Oracle, time slices, sticky, goldens G1–G12.
+        edgeCost / NeighborRank / Oracle++, time slices, sticky, goldens G1–G12.
         Handoff rationale: <code>docs/SPEC.md</code> (older Class/Car/Yard wording superseded by BUILD_SPEC).
       </div>
 
@@ -2011,55 +2028,60 @@ flowchart LR
         <li><strong>Policy numbers</strong> — Are H=16, V=3, max_expansions=50k, wall=500ms acceptable?</li>
         <li><strong>Inspector</strong> — Real request schemas (beyond toy Refrigerated/Normal/Docking)?</li>
         <li><strong>Transparent capacity</strong> — Accept exclusive-only v1, or need combine/share day one?</li>
-        <li><strong>Context keys</strong> — Production stamp/cabinet names; which transparent stations publish?</li>
+        <li><strong>Context keys</strong> — Production stamp/cabinet names; which Inspectors write Task.context keys?</li>
         <li><strong>Commit</strong> — Whole-Booking only (DECIDED); working overlay path-local.</li>
         <li><strong>Goldens</strong> — Extend G* with real topology fixtures later.</li>
         <li><strong>Stack</strong> — Kotlin (JVM) preferred; BUILD_SPEC is language-agnostic on schemas.</li>
       </ol>
 
       <!-- ========== OPEN ========== -->
-      <h2 id="open">Open questions (with v1 defaults)</h2>
+      <h2 id="open">Open questions (with v1 status)</h2>
       <p>
-        Nothing here should block a first implementation. Defaults live in
-        <code>BUILD_SPEC.md</code>. Confirm before production.
+        Many former “open” items are now <strong>DECIDED</strong> in
+        <code>BUILD_SPEC.md</code>. Remaining discussion is product/ops, not control-flow shape.
       </p>
       <table>
-        <thead><tr><th>Question</th><th>DEFAULT v1</th><th>What to discuss to finalize</th></tr></thead>
+        <thead><tr><th>Topic</th><th>Status / v1</th><th>What is still discussable</th></tr></thead>
         <tbody>
           <tr>
             <td>Aggregator / expander capacity</td>
-            <td><strong>Exclusive</strong> tracks (no multi-Booking share)</td>
-            <td>Do any real junctions require multi-Booking share on Ag?</td>
+            <td><strong>DECIDED:</strong> exclusive tracks (no multi-Booking share)</td>
+            <td>Do any real junctions require multi-Booking share on Ag later?</td>
           </tr>
           <tr>
-            <td>Backtrack when checkpoint blocks later leg</td>
-            <td>Agenda alts + clear checkpoint if backtrack through type; DEFAULT fail + report</td>
-            <td>How deep reopen-last-type for success rate?</td>
+            <td>Backtrack when later leg fails</td>
+            <td><strong>DECIDED (C2b):</strong> may backtrack to last Checkpoint only; alts retained until type checkpointed; never reopen checkpointed types</td>
+            <td>Numeric caps / heuristics so backtrack space stays practical (not the rule itself)</td>
           </tr>
           <tr>
             <td>First-fit vs score all multi-sink goals</td>
-            <td><strong>First-fit</strong> agenda order (edgeCost + NeighborRank)</td>
-            <td>Need best path among K goals for cost reasons?</td>
+            <td><strong>DECIDED:</strong> first-fit (edgeCost + NeighborRank + track name)</td>
+            <td>Need best path among K goals for cost reasons later?</td>
           </tr>
           <tr>
             <td>Leg 1 entry / fabric</td>
-            <td><strong>Virtual source S0</strong>; no input tracks used on first type; Coupler for segment 1→2</td>
-            <td>Must first type attach through a fixed headend switch?</td>
+            <td><strong>DECIDED:</strong> virtual source <strong>S0</strong> + multi-sink Coupler; no input tracks used on first type</td>
+            <td>Must first type attach through a fixed headend switch in some plants?</td>
           </tr>
           <tr>
             <td>UNSAT sticky invalidation</td>
-            <td><strong>Hopeful events only</strong>, relevance-scoped (not every new tasking)</td>
-            <td>Fine-grained deps vs epoch maps?</td>
+            <td><strong>DECIDED:</strong> hopeful events only, relevance-scoped</td>
+            <td>Fine-grained deps vs epoch maps engineering</td>
           </tr>
           <tr>
             <td>Path-acquired Context</td>
-            <td>Candidate Task.context seeded from previous hop; inspector extends</td>
+            <td><strong>DECIDED:</strong> Inspector sole writer; candidate seeded from previous Task.context; transparent inspect every visit (C2d)</td>
             <td>Prefer mandatory waypoints API instead of mid-search facts?</td>
           </tr>
           <tr>
-            <td>Which transparent stations publish facts</td>
-            <td>Per-type/instance; empty default; toy Y2 stamps</td>
-            <td>Enumerate production publishers</td>
+            <td>Which Inspectors write context keys</td>
+            <td>Per-type; empty default; toy Y2 Inspector sets <code>clearance.y2_stamp</code></td>
+            <td>Enumerate production context keys / writers</td>
+          </tr>
+          <tr>
+            <td>Force-kick exclusive holds</td>
+            <td><strong>DECIDED v1:</strong> no force-kick without full re-plan pass; serial one booking at a time in a run</td>
+            <td>Priority re-pack policies after release</td>
           </tr>
         </tbody>
       </table>
@@ -2076,7 +2098,7 @@ flowchart LR
     /**
      * Toy topology (shared):
      *   R-17 ──► Y1 ──► N-* ──► D-*
-     *            │ └─► Y2 ──► N-*  (Y2 also publishes clearance stamp)
+     *            │ └─► Y2 ──► N-*  (Y2 Inspector may write clearance.y2_stamp)
      *            └──────────────► (Y1↔Y2 loopback)
      * Y1 connects to BOTH Y2 and N so short path Y1→N and multi-switch Y1→Y2→N can play.
      */
@@ -2276,251 +2298,224 @@ flowchart LR
       {
         id: "simple",
         title: "1 · Simple",
-        blurb: "One Coupler (A*) call = whole segment R→…→N (transparent switches inside). Assembler does not get a turn at Y1. Then a second Coupler call for N→…→D.",
-        legs: ["R", "N (1 A* segment)", "D (1 A* segment)"],
+        blurb: "Stamp world. From Y1@IN1 ExpandKey children: out1→N-04 (goal), out3→N-08 (not-goal), out2→Y2 (transparent). N-04 INSPECT_FAIL (no stamp) → N-08 not a goal → Y2 writes stamp → N-04 via Y2:5 OK. Then N→D.",
+        legs: ["S0→R", "R→N: ExpandKey N-04/N-08/Y2", "N→D"],
         steps: [
           {
             phase: "assembler", leg: -1, meta: "Assembler · start",
             title: "Empty route · Booking received",
-            body: "Outer loop only. No A* yet. Bindings empty, Context empty.",
+            body: "Outer loop only. No couple yet. Bindings empty; no Task.context yet (seed <code>{}</code>).",
             consist: [], ctx: "(empty)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
-            notes: "<strong>Assembler</strong> owns demand StationType legs. <strong>Coupler/A*</strong> owns fabric between two demand Stations.",
+            notes: "<strong>Assembler</strong> owns demand StationType legs. <strong>Coupler</strong> = one multi-sink <code>couple(tail, goals)</code> per segment.",
           },
           {
-            phase: "assembler", leg: 0, meta: "Assembler · leg R",
-            title: "Pick & bind R-17 (no Coupler)",
-            body: "First type is entry-special: virtual source, no input tracks used. Assembler Prefilters Refrigerated Stations, binds <strong>R-17</strong>, starts Task context. Fabric path not required yet.",
-            consist: [{ id: "R-17", cls: "a", locked: true }],
-            ctx: "cabinets=4 · closed: Refrigerated",
+            phase: "assembler", leg: 0, meta: "Assembler · leg R prep",
+            title: "Prefilter Refrigerated · build S0 multi-sink goals",
+            body: "First type is entry-special: virtual source <strong>S0</strong> (no inbound Link; no input track used). Assembler Prefilters Refrigerated Stations → Oracle++ goals → one Coupler call.",
+            consist: [{ id: "?", cls: "a", ghost: true }],
+            ctx: "(empty) · request cabinets=4",
             candidates: [
-              { id: "R-17", st: "picked", stage: "prefilter", why: "Prefilter+bind: 4N OK (first type; inspect ≈ Prefilter, no path)" },
-              { id: "R-22", st: "pass", stage: "prefilter", why: "Prefilter OK · not chosen" },
+              { id: "R-17", st: "pass", stage: "prefilter", why: "Prefilter OK · S0 multi-sink goal" },
+              { id: "R-22", st: "pass", stage: "prefilter", why: "Prefilter OK · S0 multi-sink goal" },
             ],
             hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
-            notes: "First type: no path yet, so Prefilter ≈ full check. Tail = R-17 for next Coupler.",
+            notes: "Goals = {R-17, R-22}. ExpandKey on S0: R-17 (distToTerminal lower) before R-22. Next: <code>couple(S0, goals)</code>.",
+          },
+          {
+            phase: "coupler", leg: 0, meta: "couple · S0→R",
+            title: "Segment 1: couple(S0 → Refrigerated goals)",
+            body: "Multi-sink from virtual S0. ExpandKey order: <strong>R-17</strong> then R-22. First-fit inspect accepts R-17 (cabinets OK). Inspector writes Task.context (cabinets=4).",
+            consist: [{ id: "R-17", cls: "a", locked: true, active: true }],
+            ctx: "cabinets=4 · (R not checkpointed yet)",
+            candidates: [
+              { id: "R-17", st: "picked", stage: "accept", why: "S0→R-17 inspect OK · ExpandKey first" },
+              { id: "R-22", st: "pass", stage: "prefilter", why: "unused goal · alt until R checkpointed" },
+            ],
+            hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
+            notes: "Tail = accepted Task.output <code>R-17:out1</code>.",
           },
           {
             phase: "assembler", leg: 1, meta: "Assembler · leg N prep",
-            title: "Prefilter Normal · request seats &gt; 5",
-            body: "Leg wants StationType Normal with <strong>&gt; 5 seats</strong>. Assembler <code>Prefilter</code> only: N-08 has 4 seats → drop (no path can add seats). N-04 (8) and N-12 (12) pass. Full <code>Inspector.inspect</code> (e.g. can route track 1→2) is <em>not</em> run yet.",
+            title: "Prefilter Normal · Oracle++ goals",
+            body: "Leg wants StationType Normal with <strong>&gt; 5 seats</strong>. Prefilter: N-08 (4 seats) drop. N-04/N-12 pass. Oracle++ keeps sinks that can reach Docking. One couple next — not peel per Station.",
             consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
-            ctx: "cabinets=4 · closed: Refrigerated · request min_seats=6",
+            ctx: "cabinets=4 · tail=R-17:out1 · min_seats=6 · closed: (none yet)",
             candidates: [
-              { id: "N-04", st: "pass", stage: "prefilter", why: "8 seats ≥ 6 · A* goal" },
-              { id: "N-08", st: "fail", stage: "prefilter", why: "4 seats &lt; 6 · safe drop (path won't help)" },
-              { id: "N-12", st: "pass", stage: "prefilter", why: "12 seats ≥ 6 · A* goal" },
+              { id: "N-04", st: "pass", stage: "prefilter", why: "8 seats ≥ 6 · multi-sink goal" },
+              { id: "N-08", st: "fail", stage: "prefilter", why: "4 seats &lt; 6 · safe drop · never a goal" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "12 seats ≥ 6 · multi-sink goal" },
             ],
             hops: [], hopsActive: -1,
-            nodesOn: ["r17", "n04", "n12", "y1"],
+            nodesOn: ["r17", "n04", "n12", "y1", "y2"],
             edgesOn: [], edgesDone: [],
-            notes: "Prefilter = Assembler. Goals for Coupler = N-04, N-12 only. Track 1→2 checked later in inspect.",
+            notes: "<code>couple(R-17:out1, goals={N-04,N-12})</code>. Normal inspect needs <code>clearance.y2_stamp</code>. N-08 can still appear as a legal ExpandKey child (topology), but is not a goal.",
           },
           {
-            phase: "coupler", leg: 1, meta: "A* expand 1 · same call",
-            title: "Inner A* reaches Y1 (still one Coupler call)",
-            body: "A* expands R→Y1, hop <code>1:Y1:1</code>. Assembler waiting. Goals are Prefilter-passers only (N-04, N-12). <code>inspect</code> not run until a goal Station is reached.",
+            phase: "coupler", leg: 1, meta: "EXPAND · R-17 → Y1",
+            title: "Segment 2: EXPAND R-17 · hop into Y1",
+            body: "Start tail <code>R-17:out1</code>. ExpandKey children: only <code>1:R-17:1</code> Link→ Y1:1 [transparent]. Arrive Y1@IN1; transparent inspect OK.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "1→1 expanding", active: true },
+              { id: "Y1", cls: "yard", hop: "IN1", active: true },
               { id: "?", cls: "b", ghost: true },
             ],
-            ctx: "cabinets=4 · (Task context mid-search)",
+            ctx: "cabinets=4 · clearance.y2_stamp: missing",
             candidates: [
-              { id: "N-04", st: "pass", stage: "prefilter", why: "goal not reached yet" },
-              { id: "N-12", st: "pass", stage: "prefilter", why: "goal not reached yet" },
+              { id: "Y1", st: "pass", stage: "prefilter", why: "transparent · only legal child from R-17:out1" },
             ],
-            hops: ["1:Y1:1"], hopsActive: 0,
+            hops: ["1:R-17:1"], hopsActive: 0,
             nodesOn: ["r17", "y1"],
             edgesOn: ["e_r_y1"],
             edgesDone: [],
-            notes: "Partial path inside one A* run. N-08 never a goal (failed Prefilter seats).",
+            notes: "Cable <code>e_r_y1</code>. Next: EXPAND Y1@IN1 with legalPairs 1→1, 1→2, 1→3 (illegal 1→6).",
           },
           {
-            phase: "coupler", leg: 1, meta: "A* goal · same call",
-            title: "inspect at N-04 · full Inspector on arrival",
-            body: "Same Coupler call: path arrives N-04 on track 1, needs out track 1 (or 2). <code>inspect(setup, tasking, request, liveData)</code> runs thorough checks (seats again + <strong>can_route in→out</strong> + Task context). Pass → return hops + station to Assembler.",
+            phase: "coupler", leg: 1, meta: "EXPAND · Y1 ExpandKey",
+            title: "EXPAND Y1@IN1 · ExpandKey children",
+            body: "Legal outs from IN1 ranked <strong>lexicographic ExpandKey</strong> (not summed): <code>preferInUse</code> → <code>preferNonTransparent</code> → <code>distToTerminal</code> → rank → name → port.<br><strong>Children (ExpandKey order):</strong><br>1. <code>1:Y1:1</code> → N-04:1 [goal] non-trans · dist low<br>2. <code>1:Y1:3</code> → N-08:1 [not-goal] non-trans · dist ∞<br>3. <code>1:Y1:2</code> → Y2:1 [transparent]<br>Illegal <code>1→6</code> (N-12) is not a child until re-entry IN5.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "1→1" },
-              { id: "N-04", cls: "b", locked: true, active: true },
-            ],
-            ctx: "cabinets=4 · seats=8 · closed: Refrigerated, Normal",
-            candidates: [
-              { id: "N-04", st: "picked", stage: "accept", why: "inspect OK · seats 8 + route track 1→1" },
-              { id: "N-12", st: "pass", stage: "prefilter", why: "still a goal · not reached first" },
-            ],
-            hops: ["1:Y1:1", "1:N-04:1"], hopsActive: 1,
-            nodesOn: ["r17", "y1", "n04"],
-            edgesOn: ["e_y1_n"],
-            edgesDone: ["e_r_y1"],
-            notes: "One Coupler invocation = entire segment <strong>R → Y1 → N</strong>. Assembler never steps transparent Y1 as a demand leg.",
-          },
-          {
-            phase: "assembler", leg: 1, meta: "Assembler · after Coupler",
-            title: "Assembler commits N-04 + full hop list",
-            body: "Assembler appends the returned hops to the Booking route, merges Task context, checkpoints Normal (when timing allows), sets <code>tail = N-04</code>. Ready for Docking leg.",
-            consist: [
-              { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "from segment 1" },
-              { id: "N-04", cls: "b", locked: true },
-            ],
-            ctx: "cabinets=4 · seats=2 · closed: Refrigerated, Normal",
-            candidates: [],
-            hops: ["1:Y1:1", "1:N-04:1"], hopsActive: -1,
-            nodesOn: ["r17", "y1", "n04"],
-            edgesOn: [],
-            edgesDone: ["e_r_y1", "e_y1_n"],
-            notes: "Route/bindings now show Y1 because the <em>returned route</em> included it — not because Assembler navigated there.",
-          },
-          {
-            phase: "coupler", leg: 2, meta: "A* segment 2",
-            title: "New Coupler call: N-04 → D-*",
-            body: "Second inner run. Starts = N-04 OUT tracks, goals = Docking Stations. Independent of the first A* (except tasking capacity / Task context).",
-            consist: [
-              { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "prior segment" },
-              { id: "N-04", cls: "b", locked: true },
-              { id: "D-02", cls: "d", locked: true, active: true },
-            ],
-            ctx: "… · connector=1",
-            candidates: [{ id: "D-02", st: "picked", why: "goal of 2nd Coupler call" }],
-            hops: ["1:Y1:1", "1:N-04:1", "1:D-02:1"], hopsActive: 2,
-            nodesOn: ["n04", "d02"],
-            edgesOn: ["e_n_d"],
-            edgesDone: ["e_r_y1", "e_y1_n"],
-            notes: "Two Coupler calls total for three demand legs: (1) after R toward N, (2) after N toward D. First type R used virtual source / entry-special.",
-          },
-          {
-            phase: "system", leg: 2, meta: "SAT",
-            title: "Booking SAT",
-            body: "Sticky stores plan: bindings + full route (all hops from every Coupler return). Whole-Booking commit.",
-            consist: [
-              { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "seg1" },
-              { id: "N-04", cls: "b", locked: true },
-              { id: "D-02", cls: "d", locked: true },
-            ],
-            ctx: "done", candidates: [],
-            hops: ["1:Y1:1", "1:N-04:1", "1:D-02:1"], hopsActive: -1,
-            nodesOn: ["r17", "y1", "n04", "d02"],
-            edgesOn: [], edgesDone: ["e_r_y1", "e_y1_n", "e_n_d"],
-            notes: "Mental model: Assembler steps demand StationType→StationType; each Coupler call fills transparent Stations/Links between.",
-          },
-        ],
-      },
-      {
-        id: "multiyard",
-        title: "2 · Multi-switch + Task context",
-        blurb: "Short Y1→N Links exist but inspect fails without y2_stamp (Task context). Coupler keeps expanding → Y2 publishes stamp → Y2→N-04 inspect OK. Multi-switch discovery + why context forces detours.",
-        legs: ["R fresh", "N short fails stamp", "via Y2", "D"],
-        steps: [
-          {
-            phase: "assembler", leg: -1, meta: "Fresh resolve",
-            title: "Empty route · Booking received",
-            body: "Assembler starts with <strong>no Stations bound</strong>, empty Context, empty route. Demand legs: Refrigerated → Normal → Docking.",
-            consist: [], ctx: "(empty)", candidates: [],
-            hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
-            notes: "Same cold start as Simple — nothing pre-bound.",
-          },
-          {
-            phase: "assembler", leg: 0, meta: "Leg R",
-            title: "Bind Refrigerated R-17",
-            body: "Prefilter+inspect accepts R-17 (4N). Task context publishes <code>cabinets=4</code>. Checkpoint Refrigerated (timing simplified). Still <strong>no</strong> <code>y2_stamp</code>.",
-            consist: [{ id: "R-17", cls: "a", locked: true }],
-            ctx: "cabinets=4 · closed: Refrigerated · y2_stamp: missing",
-            candidates: [
-              { id: "R-17", st: "picked", stage: "prefilter", why: "Prefilter+bind: 4N OK" },
-              { id: "R-22", st: "pass", stage: "prefilter", why: "Prefilter OK" },
-            ],
-            hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
-            notes: "Tail = R-17 for next Coupler. Normal leg next — seats Prefilter then inspect at goal.",
-          },
-          {
-            phase: "assembler", leg: 1, meta: "Leg N · goals",
-            title: "Prefilter Normal · seats &gt; 5 (no stamp check yet)",
-            body: "Request min_seats=6. <strong>Prefilter</strong>: N-08 (4 seats) dropped. N-04/N-12 pass. Stamp / track 1→2 are <em>not</em> Prefilter — those wait for <code>inspect</code> at the Station after a path.",
-            consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
-            ctx: "cabinets=4 · y2_stamp: missing · min_seats=6",
-            candidates: [
-              { id: "N-04", st: "pass", stage: "prefilter", why: "8 seats · A* goal" },
-              { id: "N-08", st: "fail", stage: "prefilter", why: "4 seats &lt; 6 · never a goal" },
-              { id: "N-12", st: "pass", stage: "prefilter", why: "12 seats · A* goal" },
-            ],
-            hops: [], hopsActive: -1,
-            nodesOn: ["r17", "y1", "n04", "n08", "n12", "y2"],
-            edgesOn: [], edgesDone: [],
-            notes: "Fresh after R only — discovery of Y2 comes later from continued search.",
-          },
-          {
-            phase: "coupler", leg: 1, meta: "Try 1 · N-04 short",
-            title: "Try Link Y1 out1 → N-04",
-            body: "Cheapest path: hop <code>1:Y1:1</code>, Link <strong>Y1→N-04</strong>. Arrive without stamp → Inspector <strong>rejects</strong>. Do not bind. Keep searching.",
-            consist: [
-              { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "1→1 short", active: true },
-              { id: "N-04", cls: "b", ghost: true },
-            ],
-            ctx: "y2_stamp: still missing",
-            candidates: [
-              { id: "N-04", st: "fail", stage: "accept", why: "inspect: missing y2_stamp (Task context)" },
-              { id: "N-12", st: "pass", stage: "prefilter", why: "still an A* goal · not tried this expansion" },
-            ],
-            hops: ["1:Y1:1", "1:N-04:1", "✗ inspect"], hopsActive: 0,
-            nodesOn: ["r17", "y1", "n04"],
-            edgesOn: ["e_r_y1", "e_y1_n"],
-            edgesDone: [],
-            edgesBlocked: [],
-            notes: "Cyan under test: hop <code>1:Y1:1</code> → <strong>Y1 out1 → N-04</strong> (Link). N-12 is not on a short out from in1 (illegal 1→6; only via re-entry out6).",
-          },
-          {
-            phase: "coupler", leg: 1, meta: "Expand Y2",
-            title: "Continue → hop 1:Y1:2 toward Y2",
-            body: "Hop <code>1:Y1:2</code> onto Link <strong>Y1→Y2</strong>. Goals N-04/N-12 still open. N-12 cannot be reached without later re-entry.",
-            consist: [
-              { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "1→2", active: true },
-              { id: "Y2", cls: "yard", hop: "enter", active: true },
+              { id: "Y1", cls: "yard", hop: "expand outs", active: true },
               { id: "?", cls: "b", ghost: true },
             ],
-            ctx: "y2_stamp: missing (until Y2 hop)",
+            ctx: "cabinets=4 · clearance.y2_stamp: missing",
             candidates: [
-              { id: "N-04", st: "pass", stage: "prefilter", why: "still a goal via Y2:5" },
-              { id: "N-12", st: "pass", stage: "prefilter", why: "goal via re-entry out6 later" },
+              { id: "N-04", st: "pass", stage: "prefilter", why: "ExpandKey #1 · goal · e_y1_n" },
+              { id: "N-08", st: "fail", stage: "prefilter", why: "ExpandKey #2 · not-goal · e_y1_n08" },
+              { id: "Y2", st: "pass", stage: "prefilter", why: "ExpandKey #3 · transparent · e_y1_y2" },
             ],
-            hops: ["1:Y1:2"], hopsActive: 0,
-            nodesOn: ["y1", "y2"],
-            edgesOn: ["e_y1_y2"],
+            hops: ["1:R-17:1", "1:Y1:?"], hopsActive: 1,
+            nodesOn: ["r17", "y1", "n04", "n08", "y2"],
+            edgesOn: ["e_y1_n", "e_y1_n08", "e_y1_y2"],
             edgesDone: ["e_r_y1"],
-            edgesBlocked: ["e_y1_n"],
-            notes: "Cyan Y1→Y2. Short Y1→N-04 red (inspect failed on stamp).",
+            notes: "Non-transparent before transparent. Among non-trans: N-04 (distToTerminal=1) before N-08 (∞).",
           },
           {
-            phase: "coupler", leg: 1, meta: "Stamp + inspect",
-            title: "inspect at N-04 after Y2 stamp",
-            body: "Y2 hop publishes stamp into Task context. Link <strong>Y2 out5 → N-04</strong> is free. <code>inspect</code>: seats OK, stamp OK → success. (If this Link were closed, search would loop back — see scenario Loopback.)",
+            phase: "coupler", leg: 1, meta: "GOAL? N-04 fail",
+            title: "Try #1: 1:Y1:1 → N-04 · INSPECT_FAIL",
+            body: "Open set pops N-04 first (ExpandKey). Hop path <code>1:R-17:1</code>, <code>1:Y1:1</code>. Cable <code>e_y1_n</code>. GOAL? N-04 → <strong>INSPECT_FAIL missing clearance.y2_stamp</strong>. Same couple continues (Option A) — do not peel; next ExpandKey sibling is N-08, not Y2.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→1 tried" },
+              { id: "N-04", cls: "b", hop: "INSPECT_FAIL", active: true },
+            ],
+            ctx: "cabinets=4 · clearance.y2_stamp: missing",
+            candidates: [
+              { id: "N-04", st: "fail", stage: "accept", why: "INSPECT_FAIL · missing stamp · keep open set" },
+              { id: "N-08", st: "fail", stage: "prefilter", why: "next ExpandKey child (not-goal)" },
+              { id: "Y2", st: "pass", stage: "prefilter", why: "later · transparent" },
+            ],
+            hops: ["1:R-17:1", "1:Y1:1"], hopsActive: 1,
+            nodesOn: ["y1", "n04"],
+            edgesOn: ["e_y1_n"],
+            edgesDone: ["e_r_y1"],
+            notes: "Goal-reject ≠ search failure. SAT path will not include this short try.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "NOT_GOAL N-08",
+            title: "Try #2: 1:Y1:3 → N-08 · not a goal",
+            body: "Next open state by ExpandKey: hop <code>1:Y1:3</code> Link→ N-08:1 (cable <code>e_y1_n08</code>). Non-transparent ranks above Y2, so N-08 is tried before transparent. Arrive ≠ success: <strong>NOT_GOAL</strong> (4 seats · never multi-sink). No useful outs on toy map → dead branch; continue open set.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→3" },
+              { id: "N-08", cls: "b", hop: "not a goal", active: true },
+            ],
+            ctx: "cabinets=4 · clearance.y2_stamp: missing",
+            candidates: [
+              { id: "N-04", st: "fail", stage: "accept", why: "already INSPECT_FAIL this path" },
+              { id: "N-08", st: "fail", stage: "accept", why: "NOT_GOAL · seats prefilter · not in goals" },
+              { id: "Y2", st: "pass", stage: "prefilter", why: "next · transparent ExpandKey last" },
+            ],
+            hops: ["1:R-17:1", "1:Y1:3"], hopsActive: 1,
+            nodesOn: ["y1", "n08"],
+            edgesOn: ["e_y1_n08"],
+            edgesDone: ["e_r_y1", "e_y1_n"],
+            notes: "ExpandKey ranks legal topology; is_goal filters success. N-08 is not skipped just because Prefilter dropped it from goals.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "TRANSPARENT Y2 stamp",
+            title: "Try #3: 1:Y1:2 → Y2 · write stamp",
+            body: "Only after non-transparent children: hop <code>1:Y1:2</code> Link→ Y2:1 (cable <code>e_y1_y2</code>). TRANSPARENT inspect every visit: Y2 Inspector <strong>writes <code>clearance.y2_stamp</code></strong> (sole writer). Then EXPAND Y2@IN1 ExpandKey children:<br>1. <code>1:Y2:5</code> → N-04:1 [goal] · <code>e_y2_n</code><br>2. <code>1:Y2:6</code> → Y1:5 [transparent] · <code>e_y2_y1</code> (loopback; not needed here)",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→2" },
-              { id: "Y2", cls: "yard", hop: "1→5 stamp", active: true },
-              { id: "N-04", cls: "b", locked: true, active: true },
+              { id: "Y2", cls: "yard", hop: "stamp", active: true },
+              { id: "?", cls: "b", ghost: true },
             ],
-            ctx: "cabinets=4 · y2_stamp: ok · seats=8 · closed: Refrigerated, Normal",
+            ctx: "cabinets=4 · clearance.y2_stamp: true",
             candidates: [
-              { id: "N-04", st: "picked", stage: "accept", why: "inspect OK · stamp + Y2:5 free" },
-              { id: "N-12", st: "pass", stage: "prefilter", why: "not needed — N-04 succeeded first" },
+              { id: "N-04", st: "pass", stage: "prefilter", why: "ExpandKey #1 from Y2 · retry with stamp" },
+              { id: "Y1", st: "pass", stage: "prefilter", why: "ExpandKey #2 · loopback out6 (unused if N-04 OK)" },
             ],
-            hops: ["1:Y1:2", "1:Y2:5", "1:N-04:1"], hopsActive: 2,
-            nodesOn: ["y1", "y2", "n04"],
-            edgesOn: ["e_y2_n"],
-            edgesDone: ["e_r_y1", "e_y1_y2"],
-            edgesBlocked: ["e_y1_n"],
-            notes: "Path Y2→N-04. Loopback Y2→Y1 and Y1 out6→N-12 stay idle.",
+            hops: ["1:R-17:1", "1:Y1:2"], hopsActive: 1,
+            nodesOn: ["y1", "y2"],
+            edgesOn: ["e_y1_y2", "e_y2_n", "e_y2_y1"],
+            edgesDone: ["e_r_y1", "e_y1_n", "e_y1_n08"],
+            notes: "Order from Y1@IN1 open set: N-04 fail → N-08 not-goal → Y2 stamp. Not Y2 immediately after N-04.",
           },
           {
-            phase: "system", leg: 2, meta: "Finish D",
-            title: "N → D · multi-switch SAT",
-            body: "Full path: R — Y1 — Y2 — N-04 — D.",
+            phase: "coupler", leg: 1, meta: "GOAL? N-04 OK",
+            title: "1:Y2:5 → N-04 · inspect OK",
+            body: "Path hops <code>1:R-17:1</code>, <code>1:Y1:2</code>, <code>1:Y2:5</code> → N-04:1 via <code>e_y2_n</code>. Context has stamp → Normal inspect OK (stamp + seats=8). First-fit SAT for this segment. N-12 unused multi-sink alt.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→2" },
+              { id: "Y2", cls: "yard", hop: "1→5" },
+              { id: "N-04", cls: "b", locked: true, active: true },
+            ],
+            ctx: "cabinets=4 · clearance.y2_stamp · seats=8 · closed: Refrigerated",
+            candidates: [
+              { id: "N-04", st: "picked", stage: "accept", why: "inspect OK · stamp + seats" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "alt until Normal checkpointed" },
+            ],
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:5"], hopsActive: 2,
+            nodesOn: ["r17", "y1", "y2", "n04"],
+            edgesOn: ["e_y2_n"],
+            edgesDone: ["e_r_y1", "e_y1_y2"],
+            notes: "SAT path only — not the failed short N-04 try or N-08 dead branch. Tail = <code>N-04:out1</code>.",
+          },
+          {
+            phase: "assembler", leg: 1, meta: "Assembler · after couple",
+            title: "Apply N-04 · tail out-track · alts",
+            body: "Assembler appends <em>successful</em> hops only, sets <code>tail = N-04:out1</code>. Refrigerated checkpointed. Normal alts (N-12) kept if Docking fails (C2b).",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "on SAT path" },
+              { id: "Y2", cls: "yard", hop: "on SAT path" },
+              { id: "N-04", cls: "b", locked: true },
+            ],
+            ctx: "cabinets=4 · clearance.y2_stamp · seats=8 · closed: Refrigerated",
+            candidates: [],
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:5"], hopsActive: -1,
+            nodesOn: ["r17", "y1", "y2", "n04"],
+            edgesOn: [],
+            edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_n"],
+            notes: "ExpandKey: in-use → non-transparent → dist-to-terminal → NeighborRank → names · port. Transparent Y2 only after non-transparent legal children.",
+          },
+          {
+            phase: "coupler", leg: 2, meta: "couple · N→D",
+            title: "Segment 3: couple(N-04:out1 → Docking goals)",
+            body: "Third multi-sink couple. EXPAND N-04 children ExpandKey: <code>1:N-04:1</code> → D-02:1 [goal] (cable <code>e_n_d</code>). GOAL? D-02 → Docking inspect OK.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "prior" },
+              { id: "Y2", cls: "yard", hop: "prior" },
+              { id: "N-04", cls: "b", locked: true },
+              { id: "D-02", cls: "d", locked: true, active: true },
+            ],
+            ctx: "… · closed: Refrigerated, Normal",
+            candidates: [{ id: "D-02", st: "picked", why: "Docking inspect OK · ExpandKey first-fit" }],
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:5", "1:N-04:1"], hopsActive: 3,
+            nodesOn: ["n04", "d02"],
+            edgesOn: ["e_n_d"],
+            edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_n"],
+            notes: "Three couples: S0→R, R→N (N-04 fail + N-08 not-goal + Y2 stamp + N-04 OK), N→D.",
+          },
+          {
+            phase: "system", leg: 2, meta: "SAT",
+            title: "Booking SAT · whole-Booking commit",
+            body: "Sticky stores successful plan. Route is the SAT path via Y2, not the rejected short try or N-08 branch.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→2" },
@@ -2528,172 +2523,282 @@ flowchart LR
               { id: "N-04", cls: "b", locked: true },
               { id: "D-02", cls: "d", locked: true },
             ],
-            ctx: "complete",
+            ctx: "done · closed: Refrigerated, Normal (+ Docking SAT)",
             candidates: [],
-            hops: ["1:Y1:2", "1:Y2:5", "1:N-04:1", "1:D-02:1"], hopsActive: -1,
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:5", "1:N-04:1"], hopsActive: -1,
+            nodesOn: ["r17", "y1", "y2", "n04", "d02"],
+            edgesOn: [], edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_n", "e_n_d"],
+            notes: "ExpandKey prefers non-trans goals first; inspect can force transparent detours without Assembler peel.",
+          },
+        ],
+      },
+      {
+        id: "multiyard",
+        title: "2 · Multi-switch + Task context",
+        blurb: "Same ExpandKey N-leg as Simple: Y1 children N-04 → N-08 → Y2. Short N-04 fails without clearance.y2_stamp; N-08 not a goal; Y2 writes stamp; Y2:5→N-04 OK. Context forces the transparent detour.",
+        legs: ["S0→R", "ExpandKey N-leg", "via Y2 stamp", "D"],
+        steps: [
+          {
+            phase: "assembler", leg: -1, meta: "Fresh resolve",
+            title: "Empty route · Booking received",
+            body: "Assembler starts with <strong>no Stations bound</strong>, empty Task.context seed, empty route. Demand legs: Refrigerated → Normal → Docking.",
+            consist: [], ctx: "(empty)", candidates: [],
+            hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
+            notes: "Same cold start as Simple — nothing pre-bound.",
+          },
+          {
+            phase: "coupler", leg: 0, meta: "Leg R · S0 couple",
+            title: "Segment 1: couple(S0 → Refrigerated)",
+            body: "Virtual S0 multi-sink. ExpandKey: R-17 before R-22. First-fit: R-17 inspect OK. Inspector writes cabinets into Task.context. <strong>Not</strong> checkpointed yet.",
+            consist: [{ id: "R-17", cls: "a", locked: true }],
+            ctx: "cabinets=4 · closed: (none) · clearance.y2_stamp: missing",
+            candidates: [
+              { id: "R-17", st: "picked", stage: "accept", why: "S0 multi-sink inspect OK" },
+              { id: "R-22", st: "pass", stage: "prefilter", why: "alt until R checkpointed" },
+            ],
+            hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
+            notes: "Tail = <code>R-17:out1</code>. Stamp still missing until a Y2 inspect later.",
+          },
+          {
+            phase: "assembler", leg: 1, meta: "Leg N · goals",
+            title: "Prefilter Normal · seats &gt; 5 (no stamp check yet)",
+            body: "Request min_seats=6. <strong>Prefilter</strong>: N-08 (4 seats) dropped from goals. N-04/N-12 pass → multi-sink goals. Stamp is <em>not</em> Prefilter — wait for goal <code>inspect</code> after a path.",
+            consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
+            ctx: "cabinets=4 · clearance.y2_stamp: missing · min_seats=6 · tail=R-17:out1",
+            candidates: [
+              { id: "N-04", st: "pass", stage: "prefilter", why: "8 seats · multi-sink goal" },
+              { id: "N-08", st: "fail", stage: "prefilter", why: "4 seats &lt; 6 · never a goal" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "12 seats · multi-sink goal" },
+            ],
+            hops: [], hopsActive: -1,
+            nodesOn: ["r17", "y1", "n04", "n08", "n12", "y2"],
+            edgesOn: [], edgesDone: [],
+            notes: "One <code>couple(R-17:out1, {N-04,N-12})</code> — all ExpandKey tries stay inside that call.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "EXPAND Y1 ExpandKey",
+            title: "EXPAND Y1@IN1 · children ExpandKey order",
+            body: "Hop <code>1:R-17:1</code> → Y1:1 (<code>e_r_y1</code>). Transparent Y1 OK. <strong>ExpandKey children:</strong><br>1. <code>1:Y1:1</code> → N-04 [goal] · <code>e_y1_n</code><br>2. <code>1:Y1:3</code> → N-08 [not-goal] · <code>e_y1_n08</code><br>3. <code>1:Y1:2</code> → Y2 [transparent] · <code>e_y1_y2</code>",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "expand", active: true },
+              { id: "?", cls: "b", ghost: true },
+            ],
+            ctx: "clearance.y2_stamp: missing",
+            candidates: [
+              { id: "N-04", st: "pass", stage: "prefilter", why: "ExpandKey #1 · goal" },
+              { id: "N-08", st: "fail", stage: "prefilter", why: "ExpandKey #2 · not-goal" },
+              { id: "Y2", st: "pass", stage: "prefilter", why: "ExpandKey #3 · transparent" },
+            ],
+            hops: ["1:R-17:1"], hopsActive: 0,
+            nodesOn: ["r17", "y1", "n04", "n08", "y2"],
+            edgesOn: ["e_y1_n", "e_y1_n08", "e_y1_y2"],
+            edgesDone: ["e_r_y1"],
+            notes: "Lexicographic ExpandKey: non-transparent before transparent; among non-trans, lower distToTerminal first.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "N-04 fail · N-08 not-goal",
+            title: "N-04 INSPECT_FAIL · then N-08 NOT_GOAL",
+            body: "Pop N-04: path <code>1:R-17:1</code>, <code>1:Y1:1</code> → <strong>INSPECT_FAIL missing clearance.y2_stamp</strong>. Same couple continues. Pop N-08: path <code>1:Y1:3</code> → <strong>NOT_GOAL</strong> (seats). Only then expand transparent Y2.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→1 then 1→3" },
+              { id: "N-04", cls: "b", hop: "fail stamp" },
+              { id: "N-08", cls: "b", hop: "not a goal", active: true },
+            ],
+            ctx: "clearance.y2_stamp: still missing",
+            candidates: [
+              { id: "N-04", st: "fail", stage: "accept", why: "INSPECT_FAIL: missing clearance.y2_stamp" },
+              { id: "N-08", st: "fail", stage: "accept", why: "NOT_GOAL · never multi-sink" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "still a multi-sink goal" },
+            ],
+            hops: ["1:R-17:1", "1:Y1:1", "1:Y1:3"], hopsActive: 1,
+            nodesOn: ["r17", "y1", "n04", "n08"],
+            edgesOn: ["e_y1_n", "e_y1_n08"],
+            edgesDone: ["e_r_y1"],
+            edgesBlocked: [],
+            notes: "Do not jump to Y2 right after N-04 fail — ExpandKey still has N-08 (non-transparent) ahead of Y2.",
+          },
+          {
+            phase: "coupler", leg: 1, meta: "Stamp + inspect",
+            title: "Y2 stamp · 1:Y2:5 → N-04 OK",
+            body: "Hop <code>1:Y1:2</code> → Y2 (<code>e_y1_y2</code>). TRANSPARENT inspect writes <code>clearance.y2_stamp</code>. EXPAND Y2 children: <code>1:Y2:5</code> → N-04 [goal] · <code>e_y2_n</code>; <code>1:Y2:6</code> → Y1:5 · <code>e_y2_y1</code>. Prefer N-04: inspect OK (stamp + seats). (If <code>e_y2_n</code> offline → Loopback.)",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→2" },
+              { id: "Y2", cls: "yard", hop: "1→5 stamp", active: true },
+              { id: "N-04", cls: "b", locked: true, active: true },
+            ],
+            ctx: "cabinets=4 · clearance.y2_stamp: true · seats=8 · closed: Refrigerated",
+            candidates: [
+              { id: "N-04", st: "picked", stage: "accept", why: "inspect OK · stamp + Y2:5 free" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "alt · N-04 first-fit" },
+            ],
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:5"], hopsActive: 2,
+            nodesOn: ["y1", "y2", "n04"],
+            edgesOn: ["e_y2_n"],
+            edgesDone: ["e_r_y1", "e_y1_y2"],
+            edgesBlocked: ["e_y1_n"],
+            notes: "SAT hops: 1:R-17:1, 1:Y1:2, 1:Y2:5. Checkpoint Refrigerated. Tail = N-04:out1.",
+          },
+          {
+            phase: "system", leg: 2, meta: "Finish D",
+            title: "N → D · multi-switch SAT",
+            body: "Third couple: EXPAND N-04 → <code>1:N-04:1</code> Link→ D-02 (<code>e_n_d</code>). Full SAT path: R — Y1 — Y2 — N-04 — D. Checkpoint Normal after Docking OK.",
+            consist: [
+              { id: "R-17", cls: "a", locked: true },
+              { id: "Y1", cls: "yard", hop: "1→2" },
+              { id: "Y2", cls: "yard", hop: "stamp" },
+              { id: "N-04", cls: "b", locked: true },
+              { id: "D-02", cls: "d", locked: true },
+            ],
+            ctx: "complete · closed: Refrigerated, Normal",
+            candidates: [],
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:5", "1:N-04:1"], hopsActive: -1,
             nodesOn: ["r17", "y1", "y2", "n04", "d02"],
             edgesOn: [],
             edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_n", "e_n_d"],
             edgesBlocked: ["e_y1_n"],
-            notes: "Happy multi-switch path when Y2→N-04 is free. Contrast: Loopback scenario when that Link is closed.",
+            notes: "Happy multi-switch path when Y2→N-04 is free. Contrast: Loopback when that Link is offline/CAPACITY.",
           },
         ],
       },
       {
         id: "loopback",
         title: "3 · Loopback + anti-spin",
-        blurb: "Useful re-entry when Y2→N-04 is closed (→ N-12 via Y1 in5/out6), then how hop_key + V/H caps stop infinite Y1↔Y2 thrash. Goldens G1/G2.",
-        legs: ["R", "re-entry SAT", "anti-loop"],
+        blurb: "Y2:5→N-04 offline. Same ExpandKey prefix (N-04 fail stamp, N-08 not-goal, Y2 stamp), then only child is Y2:6→Y1:5 → 5:Y1:6 → N-12. hop_key + V/H caps stop infinite thrash. Goldens G1/G2.",
+        legs: ["S0→R", "ExpandKey + loopback SAT", "anti-loop"],
         steps: [
           {
             phase: "assembler", leg: -1, meta: "Fresh resolve",
             title: "Empty route · Booking received",
-            body: "Cold start. World fact: Link <strong>Y2 out5 → N-04 is closed</strong> (capacity / reserved).",
+            body: "Cold start. World fact: Link <strong>Y2 out5 → N-04 is offline / CAPACITY-blocked</strong> (<code>e_y2_n</code>).",
             consist: [], ctx: "(empty)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
             edgesBlocked: ["e_y2_n"],
-            notes: "Same fabric as multi-switch scenario; only occupancy differs on e_y2_n.",
+            notes: "Same fabric as multi-switch; only e_y2_n occupancy differs.",
           },
           {
-            phase: "assembler", leg: 0, meta: "Leg R",
-            title: "Bind R-17",
-            body: "Refrigerated OK. <code>y2_stamp</code> still missing.",
+            phase: "coupler", leg: 0, meta: "Leg R · S0 couple",
+            title: "Segment 1: couple(S0 → Refrigerated)",
+            body: "S0 multi-sink ExpandKey: R-17 then R-22. R-17 inspect OK. cabinets=4. Refrigerated <strong>not</strong> checkpointed yet. Stamp still missing.",
             consist: [{ id: "R-17", cls: "a", locked: true }],
-            ctx: "cabinets=4 · closed: Refrigerated · y2_stamp: missing",
-            candidates: [{ id: "R-17", st: "picked", stage: "prefilter", why: "Prefilter+bind OK" }],
+            ctx: "cabinets=4 · closed: (none) · clearance.y2_stamp: missing",
+            candidates: [{ id: "R-17", st: "picked", stage: "accept", why: "S0 multi-sink inspect OK" }],
             hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
             edgesBlocked: ["e_y2_n"],
-            notes: "Tail = R-17.",
+            notes: "Tail = <code>R-17:out1</code>.",
           },
           {
             phase: "assembler", leg: 1, meta: "Prefilter N",
             title: "Prefilter Normal · seats &gt; 5",
-            body: "N-08 dropped (seats). N-04 and N-12 remain goals. Stamp not checked here.",
+            body: "N-08 dropped (seats). N-04 and N-12 remain multi-sink goals. Stamp not checked here. N-12 needs re-entry path (illegal Y1 1→6).",
             consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
-            ctx: "cabinets=4 · y2_stamp: missing · min_seats=6",
+            ctx: "cabinets=4 · clearance.y2_stamp: missing · min_seats=6 · tail=R-17:out1",
             candidates: [
               { id: "N-04", st: "pass", stage: "prefilter", why: "8 seats · goal" },
-              { id: "N-08", st: "fail", stage: "prefilter", why: "4 seats" },
-              { id: "N-12", st: "pass", stage: "prefilter", why: "12 seats · goal (needs re-entry path)" },
+              { id: "N-08", st: "fail", stage: "prefilter", why: "4 seats · not a goal" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "12 seats · goal (needs IN5→OUT6)" },
             ],
             hops: [], hopsActive: -1,
             nodesOn: ["r17", "y1", "n04", "n12", "y2"],
             edgesOn: [], edgesDone: [],
             edgesBlocked: ["e_y2_n"],
-            notes: "N-12 only reachable via Y1 out6 after in5 re-entry — not a short hop from in1.",
+            notes: "<code>couple(R-17:out1, {N-04,N-12})</code> with offline {(Y2,5,N-04,1)}.",
           },
           {
-            phase: "coupler", leg: 1, meta: "Short N-04",
-            title: "Short Y1→N-04 · inspect fails (stamp)",
-            body: "Try hop <code>1:Y1:1</code> → N-04. Link free; <code>inspect</code> rejects — missing <code>y2_stamp</code>. Keep searching (same Coupler call).",
+            phase: "coupler", leg: 1, meta: "ExpandKey prefix",
+            title: "Same ExpandKey prefix as Simple",
+            body: "EXPAND R-17 → <code>1:R-17:1</code> Y1. EXPAND Y1@IN1 ExpandKey children:<br>1. <code>1:Y1:1</code> → N-04 [goal] · <code>e_y1_n</code> → <strong>INSPECT_FAIL</strong> missing stamp<br>2. <code>1:Y1:3</code> → N-08 [not-goal] · <code>e_y1_n08</code> → <strong>NOT_GOAL</strong><br>3. <code>1:Y1:2</code> → Y2 [transparent] · <code>e_y1_y2</code> → stamp written",
             consist: [
               { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "1→1", active: true },
-              { id: "N-04", cls: "b", ghost: true },
+              { id: "Y1", cls: "yard", hop: "1→1, 1→3, 1→2", active: true },
+              { id: "Y2", cls: "yard", hop: "stamp" },
+              { id: "N-04", cls: "b", hop: "fail stamp" },
+              { id: "N-08", cls: "b", hop: "not a goal" },
             ],
-            ctx: "y2_stamp: still missing",
+            ctx: "clearance.y2_stamp: true (after Y2) · e_y2_n offline",
             candidates: [
-              { id: "N-04", st: "fail", stage: "accept", why: "inspect: missing y2_stamp" },
-              { id: "N-12", st: "pass", stage: "prefilter", why: "still a goal" },
+              { id: "N-04", st: "fail", stage: "accept", why: "INSPECT_FAIL stamp (short path)" },
+              { id: "N-08", st: "fail", stage: "accept", why: "NOT_GOAL" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "still a goal via loopback" },
             ],
-            hops: ["1:Y1:1", "1:N-04:1", "✗ inspect"], hopsActive: 0,
-            nodesOn: ["r17", "y1", "n04"],
-            edgesOn: ["e_r_y1", "e_y1_n"],
-            edgesDone: [],
-            edgesBlocked: ["e_y2_n"],
-            notes: "Fail is Context, not the closed Y2→N-04 Link.",
-          },
-          {
-            phase: "coupler", leg: 1, meta: "Y2 enter",
-            title: "Expand Y1→Y2 · enter Y2",
-            body: "Hop <code>1:Y1:2</code> onto Y2. Prefer exit out5 toward N-04 (cheaper to a goal). Stamp publishes when the Y2 hop is expanded.",
-            consist: [
-              { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "1→2" },
-              { id: "Y2", cls: "yard", hop: "enter", active: true },
-              { id: "?", cls: "b", ghost: true },
-            ],
-            ctx: "y2_stamp: ok (on Y2 hop) · try out5 next",
-            candidates: [
-              { id: "N-04", st: "pass", stage: "prefilter", why: "prefer via Y2:5" },
-              { id: "N-12", st: "pass", stage: "prefilter", why: "via loopback if out5 fails" },
-            ],
-            hops: ["1:Y1:2"], hopsActive: 0,
-            nodesOn: ["y1", "y2"],
+            hops: ["1:R-17:1", "1:Y1:1", "1:Y1:3", "1:Y1:2"], hopsActive: 3,
+            nodesOn: ["r17", "y1", "y2", "n04", "n08"],
             edgesOn: ["e_y1_y2"],
-            edgesDone: ["e_r_y1"],
-            edgesBlocked: ["e_y1_n", "e_y2_n"],
-            notes: "Y2→N-04 already known closed (red) — search will not commit that Link.",
+            edgesDone: ["e_r_y1", "e_y1_n", "e_y1_n08"],
+            edgesBlocked: ["e_y2_n"],
+            notes: "Prefix matches Simple/Multiyard. Divergence is at Y2 expand (out5 offline).",
           },
           {
-            phase: "coupler", leg: 1, meta: "Y2→N-04 blocked",
-            title: "Y2 out5 → N-04 closed · skip",
-            body: "Out5 Link is <strong>CAPACITY_BLOCKED</strong>. Cannot arrive N-04 this way. Same Coupler call: try Y2 out6 (loopback) instead.",
+            phase: "coupler", leg: 1, meta: "EXPAND Y2 offline out5",
+            title: "EXPAND Y2 · only out6 (out5 offline)",
+            body: "Y2 wrote stamp. EXPAND Y2@IN1 ExpandKey children: <strong>only</strong> <code>1:Y2:6</code> → Y1:5 [transparent] · <code>e_y2_y1</code>. Link Y2:5→N-04 (<code>e_y2_n</code>) is offline — not a child. No CAPACITY inspect at N-04 via out5; edge simply absent from expand.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "prior" },
-              { id: "Y2", cls: "yard", hop: "out5 blocked", active: true },
+              { id: "Y2", cls: "yard", hop: "out5 offline · try out6", active: true },
               { id: "N-04", cls: "b", ghost: true },
             ],
-            ctx: "y2_stamp: ok · Y2→N-04 closed",
+            ctx: "clearance.y2_stamp: true · Y2→N-04 offline",
             candidates: [
-              { id: "N-04", st: "fail", stage: "accept", why: "edge closed · cannot arrive" },
-              { id: "N-12", st: "pass", stage: "prefilter", why: "try loopback path" },
+              { id: "N-04", st: "fail", stage: "accept", why: "e_y2_n offline · not expanded" },
+              { id: "Y1", st: "pass", stage: "prefilter", why: "only ExpandKey child · loopback IN5" },
             ],
-            hops: ["1:Y1:2", "✗ Y2 out5→N-04"], hopsActive: 0,
-            nodesOn: ["y2", "n04"],
-            edgesOn: [],
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:6"], hopsActive: 2,
+            nodesOn: ["y2", "y1", "n04"],
+            edgesOn: ["e_y2_y1"],
             edgesDone: ["e_r_y1", "e_y1_y2"],
             edgesBlocked: ["e_y1_n", "e_y2_n"],
-            notes: "Goal reject / edge skip inside Coupler — not a new Assembler A*.",
+            notes: "Must use Y2:6→Y1:5→out6→N-12. Illegal 1→6 never used.",
           },
           {
-            phase: "coupler", leg: 1, meta: "Loopback",
-            title: "Loopback Y2 out6 → Y1 in5 → out6",
-            body: "Hop <code>1:Y2:6</code> (IN1→OUT6) publishes stamp, Link to <strong>Y1 IN 5</strong>, then internal <code>5:Y1:6</code> (legal). Illegal <code>1→6</code> never used.",
+            phase: "coupler", leg: 1, meta: "Loopback re-entry",
+            title: "Loopback: Y1@IN5 · 5:Y1:6 → N-12",
+            body: "TRANSPARENT Y1@IN5 OK. EXPAND Y1@IN5 ExpandKey children: only legal pair <code>5→6</code> → <code>5:Y1:6</code> Link→ N-12:1 [goal] · <code>e_y1_n12</code>.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "re-enter 5→6", active: true },
               { id: "Y2", cls: "yard", hop: "1→6 loopback" },
               { id: "?", cls: "b", ghost: true },
             ],
-            ctx: "y2_stamp: ok · re-entered Y1",
+            ctx: "clearance.y2_stamp: true · re-entered Y1 IN5",
             candidates: [
-              { id: "N-12", st: "pass", stage: "prefilter", why: "next Link Y1:6→N-12" },
+              { id: "N-12", st: "pass", stage: "prefilter", why: "ExpandKey only child · e_y1_n12" },
             ],
-            hops: ["1:Y1:2", "1:Y2:6", "5:Y1:6"], hopsActive: 2,
-            nodesOn: ["y1", "y2"],
-            edgesOn: ["e_y2_y1"],
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:6", "5:Y1:6"], hopsActive: 3,
+            nodesOn: ["y1", "y2", "n12"],
+            edgesOn: ["e_y2_y1", "e_y1_n12"],
             edgesDone: ["e_r_y1", "e_y1_y2"],
             edgesBlocked: ["e_y1_n", "e_y2_n"],
             notes: "Two Y1 hop_keys: 1→2 then 5→6. Same switch Station, different tracks.",
           },
           {
             phase: "coupler", leg: 1, meta: "N-12 inspect",
-            title: "Y1 out6 → N-12 · inspect OK",
-            body: "Internal <code>5:Y1:6</code> then Link <strong>out6 → N-12</strong>. <code>inspect</code>: seats OK + stamp from Y2 on Task context → bind N-12.",
+            title: "GOAL? N-12 · inspect OK",
+            body: "Path <code>1:R-17:1</code>, <code>1:Y1:2</code>, <code>1:Y2:6</code>, <code>5:Y1:6</code> → N-12. Inspect: seats=12 + stamp → bind N-12. Checkpoint Refrigerated. Tail = N-12:out1.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "5→6" },
               { id: "Y2", cls: "yard", hop: "stamp + loopback" },
               { id: "N-12", cls: "b", locked: true, active: true },
             ],
-            ctx: "cabinets=4 · y2_stamp: ok · seats=12 · closed: Refrigerated, Normal",
+            ctx: "cabinets=4 · clearance.y2_stamp: true · seats=12 · closed: Refrigerated",
             candidates: [
-              { id: "N-04", st: "fail", stage: "accept", why: "Y2→N-04 closed" },
+              { id: "N-04", st: "fail", stage: "accept", why: "short fail + e_y2_n offline" },
               { id: "N-12", st: "picked", stage: "accept", why: "inspect OK via re-entry" },
             ],
-            hops: ["1:Y1:2", "1:Y2:6", "5:Y1:6", "1:N-12:1"], hopsActive: 3,
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:6", "5:Y1:6"], hopsActive: 3,
             nodesOn: ["y1", "y2", "n12"],
             edgesOn: ["e_y1_n12"],
             edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_y1"],
             edgesBlocked: ["e_y1_n", "e_y2_n"],
-            notes: "One Coupler call: short fail → Y2 → blocked exit → loopback → N-12.",
+            notes: "One couple: N-04 fail → N-08 not-goal → Y2 stamp → loopback → N-12.",
           },
           {
             phase: "system", leg: 2, meta: "SAT",
             title: "N-12 → D · loopback SAT",
-            body: "Finish Docking from N-12. Full route revisits Y1 with two hop_keys.",
+            body: "Third couple: finish Docking from N-12:out1 → D-11. Checkpoint Normal after Docking OK. Full route revisits Y1 with two hop_keys.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→2 then 5→6" },
@@ -2701,24 +2806,24 @@ flowchart LR
               { id: "N-12", cls: "b", locked: true },
               { id: "D-11", cls: "d", locked: true },
             ],
-            ctx: "complete",
+            ctx: "complete · closed: Refrigerated, Normal",
             candidates: [],
-            hops: ["1:Y1:2", "1:Y2:6", "5:Y1:6", "1:N-12:1", "1:D-11:1"], hopsActive: -1,
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:6", "5:Y1:6", "1:N-12:1"], hopsActive: -1,
             nodesOn: ["r17", "y1", "y2", "n12", "d11"],
             edgesOn: [],
             edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_y1", "e_y1_n12", "e_n12_d"],
             edgesBlocked: ["e_y1_n", "e_y2_n"],
-            notes: "Useful re-entry: different hop_keys on Y1. Next steps: why this must not become infinite Y1↔Y2 thrash.",
+            notes: "Useful re-entry: different hop_keys on Y1. Next: why this must not become infinite Y1↔Y2 thrash.",
           },
           {
             phase: "system", leg: 1, meta: "Anti-loop lesson",
             title: "Useful re-entry ≠ infinite loopback",
-            body: "Without guards, after failing Y2→N-04 the search could bounce <strong>Y1↔Y2 forever</strong> (same tracks, no progress). That is oscillation — not the legal re-entry we just used.",
+            body: "Without guards, after offline Y2→N-04 the search could bounce <strong>Y1↔Y2 forever</strong> (same tracks, no progress). That is oscillation — not the legal re-entry we just used.",
             consist: [
               { id: "Y1", cls: "yard", hop: "1→2 already used", active: true },
               { id: "Y2", cls: "yard", hop: "1→6 already used", active: true },
             ],
-            ctx: "closed-set must remember hop_keys (+ Context)",
+            ctx: "closed-set must remember hop_keys (+ Task.context fp)",
             candidates: [],
             hops: ["1:Y1:2", "1:Y2:6", "5:Y1:6", "… 1:Y1:2 again? ✗"], hopsActive: 3,
             nodesOn: ["y1", "y2"],
@@ -2754,15 +2859,15 @@ flowchart LR
   // does not permanently kill later stamp paths — but hop_key still unique
   on_exceed: "BUDGET"              // finite UNSAT, never hang
 }`,
-            notes: "<strong>Allow</strong> re-entry when hop_key is new and Context improved. <strong>Kill</strong> same hop_key, visit&gt;V, hops&gt;H, expansions wall → <code>BUDGET</code>. Golden G2.",
+            notes: "<strong>Allow</strong> re-entry when hop_key is new and context improved. <strong>Kill</strong> same hop_key, visit&gt;V, hops&gt;H, expansions wall → <code>BUDGET</code>. Golden G2.",
           },
         ],
       },
       {
         id: "prefilter",
         title: "4 · Prefilter rejection",
-        blurb: "Fresh start → bind R → all Normal Stations fail Assembler Prefilter (zero Coupler goals; inspect never runs).",
-        legs: ["R fresh", "N Prefilter empty"],
+        blurb: "Fresh start → S0 couple binds R (ExpandKey R-17 first) → all Normal Stations fail Assembler Prefilter (zero multi-sink goals; couple for N never runs — no ExpandKey fabric search).",
+        legs: ["S0→R", "N Prefilter empty"],
         steps: [
           {
             phase: "assembler", leg: -1, meta: "Fresh resolve",
@@ -2770,24 +2875,24 @@ flowchart LR
             body: "No bounds yet.",
             consist: [], ctx: "(empty)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
-            notes: "Cold Assembler.",
+            notes: "Cold Assembler. Contrast Simple: there Normal Prefilter passes N-04/N-12 and ExpandKey runs.",
           },
           {
-            phase: "assembler", leg: 0, meta: "Leg R",
-            title: "Bind R-17",
-            body: "Refrigerated prefilter+bind OK. cabinets=4.",
+            phase: "coupler", leg: 0, meta: "Leg R · S0 couple",
+            title: "Segment 1: couple(S0 → Refrigerated)",
+            body: "S0 ExpandKey order: R-17 then R-22. Inspect accepts R-17. cabinets=4 on Task.context. Refrigerated <strong>not</strong> checkpointed yet (Normal has not succeeded).",
             consist: [{ id: "R-17", cls: "a", locked: true }],
-            ctx: "cabinets=4 · closed: Refrigerated · min_seats=6",
-            candidates: [{ id: "R-17", st: "picked", stage: "prefilter", why: "Prefilter+bind OK" }],
+            ctx: "cabinets=4 · closed: (none) · min_seats=6 · tail=R-17:out1",
+            candidates: [{ id: "R-17", st: "picked", stage: "accept", why: "S0 ExpandKey first · inspect OK" }],
             hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
-            notes: "Next: Normal prefilter only — Coupler never starts if zero goals.",
+            notes: "Next: Normal Prefilter — couple never starts if zero goals. No hops, no e_y1_* cables.",
           },
           {
             phase: "assembler", leg: 1, meta: "Prefilter pool",
             title: "All Normal Stations fail Prefilter",
-            body: "Request seats &gt; 5 plus a hard protocol flag. <strong>Prefilter</strong> drops everyone path-independently (N-08 seats; N-04/N-12 protocol never supported). No Coupler call — no fabric, no inspect().",
+            body: "Request seats &gt; 5 plus a hard protocol flag. <strong>Prefilter</strong> drops everyone path-independently (N-08 seats; N-04/N-12 protocol never supported). <strong>No couple call</strong> — no ExpandKey expand, no fabric Links, no inspect() at Normal. N-08 is not even an ExpandKey child here (search never starts).",
             consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
-            ctx: "cabinets=4 · min_seats=6",
+            ctx: "cabinets=4 · min_seats=6 · closed: (none)",
             candidates: [
               { id: "N-04", st: "fail", stage: "prefilter", why: "protocol never supported" },
               { id: "N-08", st: "fail", stage: "prefilter", why: "4 seats &lt; 6" },
@@ -2795,175 +2900,188 @@ flowchart LR
             ],
             hops: [], hopsActive: -1,
             nodesOn: ["n04", "n08", "n12"], edgesOn: [], edgesDone: [],
-            notes: "All fails are Prefilter (Assembler). inspect never ran.",
+            notes: "All fails are Prefilter (Assembler). Contrast Simple N-leg: Prefilter passes N-04/N-12; N-08 can still appear as ExpandKey not-goal child.",
           },
           {
             phase: "fail", leg: 1, meta: "UNSAT",
             title: "NO_CANDIDATES (Prefilter empty)",
-            body: "No Coupler goals. Failure is Assembler-level Prefilter, not track routing.",
+            body: "No multi-sink goals. Failure is Assembler-level Prefilter, not track routing / ExpandKey. R is bound but <em>not</em> checkpointed — C2b may still try R alts if any remain.",
             consist: [{ id: "R-17", cls: "a", locked: true }, { id: "?", cls: "b", ghost: true }],
-            ctx: "cabinets=4", candidates: [],
+            ctx: "cabinets=4 · closed: (none)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
             failure: `{
   status: "UNSAT",
-  failed_leg: 2,
   code: "NO_CANDIDATES",
-  stage: "prefilter",
-  checkpoints: [{ leg: 1, stationType: "Refrigerated", station: "R-17" }],
+  legIndex: 1,
+  message: "No Normal Station passed Prefilter",
+  stationId: null,
+  pathTaken: null,
+  // R not checkpointed (next non-transparent never OK) — alts still usable
+  checkpoints: [],
   counts: { pool: 3, prefilter_pass: 0 },
-  suggestions: ["Reopen Refrigerated checkpoint", "Relax min_seats / protocol"]
+  suggestions: ["Try remaining Refrigerated alts (C2b)", "Relax min_seats / protocol"]
 }`,
-            notes: "Contrast multi-switch: there Prefilter passed some Stations; inspect failed on path context.",
+            notes: "Contrast multi-switch: Prefilter passed some Stations; inspect failed on path context (INSPECT_FAIL) after ExpandKey tried N-04.",
           },
         ],
       },
       {
         id: "nosol",
         title: "5 · No solution",
-        blurb: "Fresh start → R → Y1 → N succeeds → Docking capacity-blocked on N→D.",
-        legs: ["R fresh", "N OK", "D blocked"],
+        blurb: "Fresh start → S0→R → R→N ExpandKey stamp path SAT (1:R-17:1, 1:Y1:2, 1:Y2:5) → Docking CAPACITY on e_n_d. Normal not checkpointed; C2b may try N alts.",
+        legs: ["S0→R", "R→N via Y2", "D blocked"],
         steps: [
           {
             phase: "assembler", leg: -1, meta: "Fresh resolve",
             title: "Empty route · Booking received",
-            body: "Cold start.",
+            body: "Cold start. Shared fixture: Normal needs <code>clearance.y2_stamp</code>.",
             consist: [], ctx: "(empty)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
             notes: "No pre-bound Stations.",
           },
           {
-            phase: "assembler", leg: 0, meta: "Leg R",
-            title: "Bind R-17",
-            body: "Refrigerated OK.",
+            phase: "coupler", leg: 0, meta: "Leg R · S0 couple",
+            title: "Segment 1: couple(S0 → Refrigerated)",
+            body: "S0 ExpandKey: R-17 first. Inspect OK. Tail = <code>R-17:out1</code>. Not checkpointed yet.",
             consist: [{ id: "R-17", cls: "a", locked: true }],
-            ctx: "cabinets=4 · closed: Refrigerated",
-            candidates: [{ id: "R-17", st: "picked", why: "OK" }],
+            ctx: "cabinets=4 · closed: (none)",
+            candidates: [{ id: "R-17", st: "picked", stage: "accept", why: "S0 multi-sink OK" }],
             hops: [], hopsActive: -1, nodesOn: ["r17"], edgesOn: [], edgesDone: [],
-            notes: "Next Normal via simple corridor.",
+            notes: "Next: multi-sink couple toward Normal (same ExpandKey stamp path as Simple).",
           },
           {
-            phase: "coupler", leg: 1, meta: "Leg N",
-            title: "R → Y1 → N-04 (short) succeeds",
-            body: "Stamp already satisfied for this scenario (or not required). Bind N-04 on short path.",
+            phase: "coupler", leg: 1, meta: "Leg N ExpandKey",
+            title: "R → Y1 → Y2 → N-04 succeeds",
+            body: "Same ExpandKey N-leg as Simple: Y1 children N-04 (INSPECT_FAIL stamp) → N-08 (NOT_GOAL) → Y2 (write stamp) → <code>1:Y2:5</code> → N-04 OK. SAT hops <code>1:R-17:1</code>, <code>1:Y1:2</code>, <code>1:Y2:5</code>. Cables <code>e_r_y1</code>, <code>e_y1_y2</code>, <code>e_y2_n</code>. Checkpoint Refrigerated. Normal alts kept.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "1→1" },
+              { id: "Y1", cls: "yard", hop: "1→2" },
+              { id: "Y2", cls: "yard", hop: "1→5" },
               { id: "N-04", cls: "b", locked: true, active: true },
             ],
-            ctx: "cabinets=4 · seats=2 · closed: Refrigerated, Normal",
-            candidates: [{ id: "N-04", st: "picked", why: "Inspector OK" }],
-            hops: ["1:Y1:1", "1:N-04:1"], hopsActive: 1,
-            nodesOn: ["r17", "y1", "n04"],
-            edgesOn: ["e_y1_n"], edgesDone: ["e_r_y1"],
-            notes: "Partial route ready for Docking.",
+            ctx: "cabinets=4 · clearance.y2_stamp · seats=8 · closed: Refrigerated",
+            candidates: [{ id: "N-04", st: "picked", stage: "accept", why: "inspect OK · stamp path" }],
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:5"], hopsActive: 2,
+            nodesOn: ["r17", "y1", "y2", "n04"],
+            edgesOn: ["e_y2_n"], edgesDone: ["e_r_y1", "e_y1_y2"],
+            notes: "Tail = <code>N-04:out1</code>. Ready for Docking couple.",
           },
           {
             phase: "coupler", leg: 2, meta: "Blocked",
-            title: "N → D edges fully reserved",
-            body: "Docking inspect would accept D-02/D-11, but B-88 holds N→D capacity. No free path.",
+            title: "N → D · CAPACITY (all Links held)",
+            body: "Docking goals Prefilter/Oracle++ OK, but B-88 holds N→D capacity (<code>e_n_d</code>). Multi-sink couple exhausts — no free path. Code <code>CAPACITY</code> (not INSPECT_FAIL).",
             consist: [
               { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "R→N" },
+              { id: "Y1", cls: "yard", hop: "prior" },
+              { id: "Y2", cls: "yard", hop: "prior" },
               { id: "N-04", cls: "b", locked: true },
               { id: "?", cls: "d", ghost: true },
             ],
-            ctx: "…", candidates: [
-              { id: "D-02", st: "busy", why: "path full" },
-              { id: "D-11", st: "busy", why: "path full" },
+            ctx: "… · closed: Refrigerated only",
+            candidates: [
+              { id: "D-02", st: "busy", why: "CAPACITY · e_n_d full" },
+              { id: "D-11", st: "busy", why: "CAPACITY · path full" },
             ],
             hops: ["✗ N→D blocked"], hopsActive: 0,
-            nodesOn: ["n04", "d02"], edgesOn: [], edgesDone: ["e_r_y1", "e_y1_n"],
+            nodesOn: ["n04", "d02"], edgesOn: [],
+            edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_n"],
             edgesBlocked: ["e_n_d", "e_n_d_busy"],
-            notes: "Capacity, not Inspector.",
+            notes: "Normal not checkpointed — C2b may backtrack to last Checkpoint (R) and try N alts (e.g. N-12) if any path could reach free Docking.",
           },
           {
             phase: "fail", leg: 2, meta: "UNSAT",
-            title: "CAPACITY_BLOCKED · no solution",
-            body: "Failed under checkpoints R-17, N-04 after a full cold-start attempt.",
+            title: "CAPACITY · no solution",
+            body: "After alts exhausted (or no better N sink reaches free D), UNSAT. Checkpoint list shows only Refrigerated — Normal was never locked.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "held" },
+              { id: "Y2", cls: "yard", hop: "held" },
               { id: "N-04", cls: "b", locked: true },
               { id: "D-??", cls: "d", ghost: true },
             ],
-            ctx: "partial route only", candidates: [],
+            ctx: "partial route only · closed: Refrigerated", candidates: [],
             hops: [], hopsActive: -1, nodesOn: ["n04"], edgesOn: [], edgesDone: [],
             edgesBlocked: ["e_n_d"],
             failure: `{
   status: "UNSAT",
-  failed_leg: 3,
-  code: "CAPACITY_BLOCKED",
+  code: "CAPACITY",
+  legIndex: 2,
+  message: "N→D Links held by B-88",
+  stationId: "N-04",
+  pathTaken: ["1:R-17:1", "1:Y1:2", "1:Y2:5"],
   checkpoints: [
-    { leg: 1, stationType: "Refrigerated", station: "R-17" },
-    { leg: 2, stationType: "Normal", station: "N-04" }
+    { leg: 0, stationType: "Refrigerated", station: "R-17" }
+    // Normal not checkpointed — Docking never OK
   ],
-  blockers: [{ booking: "B-88", edge: "N→D" }],
-  suggestions: ["Release B-88", "Wait for capacity"]
+  blockers: [{ booking: "B-88", edge: "e_n_d" }],
+  suggestions: ["Release B-88", "Wait for capacity", "Try remaining Normal alts if any"]
 }`,
-            notes: "Hopeful release can unlock a later resolve.",
+            notes: "Hopeful release can unlock a later resolve (sticky UNSAT bust).",
           },
         ],
       },
       {
         id: "sticky",
         title: "6 · Sticky & cache",
-        blurb: "Fresh resolve to SAT → sticky hit on re-resolve → then UNSAT cache behavior.",
+        blurb: "Fresh resolve to SAT (ExpandKey stamp path 1:R-17:1 → 1:Y1:2 → 1:Y2:5 → N-04 → D) → sticky hit on re-resolve → then UNSAT cache behavior.",
         legs: ["cold SAT", "sticky", "UNSAT cache"],
         steps: [
           {
             phase: "assembler", leg: -1, meta: "Fresh resolve",
             title: "Empty route · first resolve",
-            body: "No snapshot yet. Assembler runs cold.",
+            body: "No snapshot yet. Assembler runs cold (serial one booking in the run).",
             consist: [], ctx: "(empty)", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
-            notes: "Will produce a sticky snapshot.",
+            notes: "Will produce a sticky snapshot of the ExpandKey stamp SAT path.",
           },
           {
             phase: "system", leg: 2, meta: "Cold SAT",
-            title: "First resolve succeeds R—Y1—N—D",
-            body: "Full Assembler+Coupler run (summarized). Snapshot stores Stations + switch hops + Links.",
+            title: "First resolve succeeds R—Y1—Y2—N—D",
+            body: "Full Assembler+Coupler: three multi-sink couples. N-leg ExpandKey: N-04 fail stamp → N-08 not-goal → Y2 stamp → N-04 OK. SAT hops <code>1:R-17:1</code>, <code>1:Y1:2</code>, <code>1:Y2:5</code>, then <code>1:N-04:1</code> → D-02. Cables <code>e_r_y1</code>, <code>e_y1_y2</code>, <code>e_y2_n</code>, <code>e_n_d</code>. Snapshot stores Stations + switch hops + Links on the plan.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "1→1" },
+              { id: "Y1", cls: "yard", hop: "1→2" },
+              { id: "Y2", cls: "yard", hop: "stamp" },
               { id: "N-04", cls: "b", locked: true },
               { id: "D-02", cls: "d", locked: true },
             ],
-            ctx: "snapshot written",
+            ctx: "snapshot written · clearance.y2_stamp on plan path",
             candidates: [],
-            hops: ["1:Y1:1", "1:N-04:1", "1:D-02:1"], hopsActive: -1,
-            nodesOn: ["r17", "y1", "n04", "d02"],
-            edgesOn: [], edgesDone: ["e_r_y1", "e_y1_n", "e_n_d"],
-            notes: "This is the only full search in the sticky happy path.",
+            hops: ["1:R-17:1", "1:Y1:2", "1:Y2:5", "1:N-04:1"], hopsActive: -1,
+            nodesOn: ["r17", "y1", "y2", "n04", "d02"],
+            edgesOn: [], edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_n", "e_n_d"],
+            notes: "Only full search in the sticky happy path. Same ExpandKey stamp world as Simple/Multi-switch.",
           },
           {
             phase: "system", leg: -1, meta: "Sticky hit",
             title: "Resolve again · no search",
-            body: "World unchanged → return snapshot. sticky_hit=true.",
+            body: "World unchanged (plan-relevant epochs) → return snapshot. sticky_hit=true. Zero couple expansions — ExpandKey not re-run.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
-              { id: "Y1", cls: "yard", hop: "1→1" },
+              { id: "Y1", cls: "yard", hop: "1→2" },
+              { id: "Y2", cls: "yard", hop: "stamp" },
               { id: "N-04", cls: "b", locked: true },
               { id: "D-02", cls: "d", locked: true },
             ],
             ctx: "sticky hit", candidates: [],
-            hops: ["(replayed)"], hopsActive: -1,
-            nodesOn: ["r17", "y1", "n04", "d02"],
-            edgesOn: [], edgesDone: ["e_r_y1", "e_y1_n", "e_n_d"],
+            hops: ["(replayed 1:R-17:1, 1:Y1:2, 1:Y2:5, 1:N-04:1)"], hopsActive: -1,
+            nodesOn: ["r17", "y1", "y2", "n04", "d02"],
+            edgesOn: [], edgesDone: ["e_r_y1", "e_y1_y2", "e_y2_n", "e_n_d"],
             notes: "No re-Setup; expansions=0.",
           },
           {
             phase: "fail", leg: -1, meta: "Prior UNSAT",
             title: "Another Booking failed earlier",
-            body: "UNSAT cached with hopeful_token (e.g. capacity).",
+            body: "UNSAT cached with hope scoped to relevant types (e.g. CAPACITY on Docking / <code>e_n_d</code>).",
             consist: [], ctx: "UNSAT cached", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
-            failure: `{ status: "UNSAT", code: "CAPACITY_BLOCKED", hopeful_token: "…" }`,
-            notes: "Separate Booking — negative cache.",
+            failure: `{ status: "UNSAT", code: "CAPACITY", legIndex: 2, message: "…", hopeful_token: "…" }`,
+            notes: "Separate Booking — negative cache (relevance-scoped).",
           },
           {
             phase: "system", leg: -1, meta: "No hopeful",
             title: "Re-resolve UNSAT · cache hit",
-            body: "No hopeful change → return cached failure, no Station scan.",
+            body: "No hopeful change → return cached failure, no Station scan, no ExpandKey.",
             consist: [], ctx: "UNSAT cache hit", candidates: [],
             hops: [], hopsActive: -1, nodesOn: [], edgesOn: [], edgesDone: [],
             notes: "Claims alone do not bust UNSAT cache.",
@@ -2971,12 +3089,12 @@ flowchart LR
           {
             phase: "assembler", leg: -1, meta: "Hopeful",
             title: "Release → cache miss · full resolve again",
-            body: "Hopeful event. Fresh Assembler run from empty (or revalidate) may SAT.",
+            body: "Hopeful event (tasking freed / Link opened on relevant types). Fresh Assembler run may SAT — still no force-kick of peers without re-plan. Re-runs ExpandKey stamp path if needed.",
             consist: [], ctx: "cache miss · cold-ish resolve", candidates: [],
             hops: [], hopsActive: -1,
-            nodesOn: ["r17", "y1", "n04", "d02"],
-            edgesOn: ["e_r_y1", "e_y1_n", "e_n_d"], edgesDone: [],
-            notes: "Back to full search when the world can improve.",
+            nodesOn: ["r17", "y1", "y2", "n04", "d02"],
+            edgesOn: ["e_r_y1", "e_y1_y2", "e_y2_n", "e_n_d"], edgesDone: [],
+            notes: "Back to full multi-sink ExpandKey search when the world can improve.",
           },
         ],
       },
@@ -3633,7 +3751,7 @@ flowchart LR
       const pill = document.getElementById("phasePill");
       const phaseMap = {
         assembler: ["assembler", "Assembler"],
-        coupler: ["coupler", "Coupler A*"],
+        coupler: ["coupler", "Coupler multi-sink"],
         system: ["system", "System / sticky"],
         fail: ["fail", "Failure report"],
       };
@@ -3725,9 +3843,9 @@ flowchart LR
         candHint.innerHTML =
           "<strong>StationType " + classes.join(" / ") + " Stations.</strong> " +
           (stages.includes("prefilter") && !stages.includes("accept")
-            ? "<span style='color:var(--class-a)'>Prefilter</span> only (Assembler, before A*) — path stamps / track pair not applied yet."
+            ? "<span style='color:var(--class-a)'>Prefilter</span> only (Assembler, before multi-sink couple) — Task.context / track pair not applied yet."
             : stages.includes("accept")
-              ? "<span style='color:var(--yard)'>inspect</span> = Inspector.inspect at Coupler goal (tasking + path context + track pair)."
+              ? "<span style='color:var(--yard)'>inspect</span> = Inspector.inspect at multi-sink goal or transparent hop (tasking + Task.context + track pair)."
               : "Mix of Prefilter / inspect.");
         s.candidates.forEach((c) => {
           const row = document.createElement("div");

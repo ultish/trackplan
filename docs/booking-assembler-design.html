@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Consist — Design Notes (Rail Model)</title>
+  <title>Trackplan — Design Notes</title>
   <!-- Offline: vendored under docs/vendor/ (no CDN) -->
   <script src="vendor/mermaid.min.js"></script>
   <script src="vendor/cytoscape.min.js"></script>
@@ -929,8 +929,8 @@
 <body>
   <div class="shell">
     <nav class="toc" aria-label="Table of contents">
-      <div class="brand">Consist</div>
-      <div class="brand-sub">Consist · rail model · interactive</div>
+      <div class="brand">Trackplan</div>
+      <div class="brand-sub">Stations · Links · interactive (vocab pass later)</div>
       <div class="toc-section">Start</div>
       <a href="#intro">Why this doc</a>
       <a href="#terminology">Terminology</a>
@@ -954,17 +954,16 @@
     </nav>
 
     <main>
-      <h1>Consist — design notes</h1>
+      <h1>Trackplan — design notes</h1>
       <p class="lede">
-        <strong>Consist</strong> turns ordered <strong>Class + Setup</strong> legs into a
-        growing <strong>consist</strong> of <strong>Cars</strong>, coupled through <strong>Yards</strong>
-        on numbered tracks — deterministically, with sticky reuse, and with
-        explanations when we fail.
+        <strong>Trackplan</strong> places ordered booking legs onto a network of
+        <strong>Stations</strong> (see BUILD_SPEC for StationType / Tasking).
+        This HTML still uses older Class/Car/Yard labels in places — narrative only until a rename pass.
       </p>
 
       <h2 id="intro">Why this doc</h2>
       <p>
-        This captures the shared model for <strong>Consist</strong>: vocabulary,
+        This captures interactive walkthroughs for <strong>Trackplan</strong>: vocabulary,
         the two-layer algorithm (Assembler + Coupler), performance, failure
         reporting, and how we stop the yard mesh from exploding.
       </p>

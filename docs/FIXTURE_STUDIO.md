@@ -1,4 +1,4 @@
-# Consist Fixture Studio
+# Trackplan Fixture Studio
 
 **Status:** design only — **not implemented**  
 **Audience:** humans and agents who will build test tooling after (or alongside) the domain engine  
@@ -26,8 +26,8 @@ Hand-authoring JSON fixtures for that is slow and error-prone. Walkthrough HTML 
 
 | Name | Role |
 |------|------|
-| **Consist Fixture Studio** (or **Consist Studio**) | Author fixtures / goldens |
-| **Consist** (engine) | Assembler + Coupler domain library/service |
+| **Trackplan Fixture Studio** | Author fixtures / goldens |
+| **Trackplan** (engine) | Assembler + Coupler domain library/service |
 
 ### This is not
 

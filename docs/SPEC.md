@@ -1,11 +1,13 @@
-# Consist — Full Design Spec (handoff)
+# Trackplan — Full Design Spec (handoff)
 
-**Project:** **Consist** — sticky booking assembly on a rail fabric.  
+**Project:** **Trackplan** — sticky booking placement on Stations (asset scheduling under the covers).  
 **Purpose:** Single dense document so a **new LLM session or human implementer** can continue without replaying the design chat.  
 **Scope:** Product model, algorithms, decisions, open questions, remaining work.  
 **Not:** UI polish, marketing, or a substitute for interactive walkthroughs.
 
-**Name note:** *Consist* is the product/repo; a **consist** is also the domain object (bound Cars + route). The outer engine is still called **Assembler**; the path engine **Coupler**.
+**Canonical entities and latest engine decisions:** prefer **[BUILD_SPEC.md](./BUILD_SPEC.md) §1–§3** (StationType/Station/Tasking). Some later SPEC sections still use older Class/Car/Yard wording — treat BUILD_SPEC as authoritative where they conflict.
+
+**Engines:** **Assembler** (outer), **Coupler** (inner path search).
 
 | Doc | Role |
 |-----|------|
@@ -33,34 +35,37 @@ There may be thousands of Cars, many Yard types, multi-hop Yard paths (including
 
 ---
 
-## 2. Vocabulary (rail only)
+## 2. Vocabulary
 
-Use these terms in code, APIs, and docs. Do **not** use legacy synonyms (asset, resource type, string, switch, modem, antenna) in new modules unless bridging an old system.
+Use these terms in code, APIs, and docs. Asset scheduling under the covers; **Stations** are the domain cover.
 
 | Term | Meaning |
 |------|---------|
-| **Class** | Catalog role / type (many Cars implement one Class) |
-| **Car** | Concrete instance of a Class |
-| **Setup** | Named costly mode a Class/Car can be armed into |
-| **Inspector** | Per-Class logic: `prefilter` + `accept` (+ publish facts) |
-| **Booking** | End-to-end reservation: legs, consist, route, context, sticky/fail |
-| **Leg** | One Class requirement on a Booking (request fields + optional Setup) |
-| **Consist** | Ordered bound Cars so far (grows 1, 2, 3, …) |
-| **Context** | Fact map accumulated from binds + path (Yard) visits |
-| **Yard** | Junction with numbered IN/OUT tracks and legal in→out pairs |
-| **Track / port** | `(device, in\|out, track_id)` |
-| **Hop** | `in:device:out` — one visit through a device |
-| **Route** | Ordered hop list for the Booking (Yards may repeat with different hop_keys) |
-| **Cable** | External edge out-track → in-track |
-| **Assembler** | Outer engine: legs, candidates, Context, Coupler calls, sticky/fail |
-| **Coupler** | Inner engine: multi-sink path search on ports between two Class endpoints |
-| **Oracle** | Optional precomputed reachability/distances on ports |
-| **Checkpoint** | Class-once: after bind, other Cars of that Class not tried for this Booking |
-| **prefilter** | Cheap Assembler-side screen (path-independent / already-known Context only) |
-| **accept** | Full inspection at Coupler goal (path Context + track routing + deep rules) |
+| **StationType** | Catalog type (schemas, inspector, heuristics, `transparent`) — *not* JVM `Class` |
+| **Station** | Instance of a StationType (setup + tasking + tracks) |
+| **transparent** | StationType omitted from Booking demand; path filler (e.g. switch) |
+| **Track** | Named IN or OUT endpoint on a Station |
+| **Link** | Topology: one station’s OUT track → another’s IN track |
+| **Setup** | Semi-static station properties (schema on type, values on station); not booking-driven |
+| **Tasking** | List of **Tasks** on a Station — live/planned-live source of truth |
+| **Task** | One use of a station: input, output, **context**, taskingConfiguration |
+| **Request** | User demand on a Booking leg (may be `{}` for transparent path work) |
+| **Inspector** | Per-StationType: `(setup, tasking, request) → tasking \| fail` (same API all types) |
+| **Booking** | Demand legs + plan (bindings, route, failure, sticky) |
+| **Leg** | Non-transparent StationType + request |
+| **Route / Hop** | Full path after schedule: `in:station:out` (includes transparent stations) |
+| **Assembler** | Outer engine: legs, candidates, checkpoints, sticky, incremental resolve |
+| **Coupler** | Inner engine: path between leg endpoints on the station graph |
+| **Route** | Full hop path after resolve (user-visible plan) |
+| **Trackplan** | Project name (formerly Consist) |
+| **liveData** | Live metrics on a Station (not setup, not request); can block inspect |
+| **Prefilter** | Cheap screen: setup + request (+ optional context/liveData); no Task |
+| **Binding** | Plan record: this Booking uses this Station (leg or path) |
 
-**Hop syntax:** `1:Y1:1` = enter Yard Y1 on IN1, leave on OUT1.  
-`5:Y1:6` = different visit (re-entry). Same Yard device can appear twice on a route with different hop_keys.
+**Bridge:** ResourceType→StationType · Asset→Station · Class/Car→StationType/Station · Yard→transparent StationType · Cable→Link · Port→Track.
+
+**Hop syntax:** `1:SW1:2` = enter station SW1 on IN1, leave on OUT2.  
+Re-entry: same station twice only with a different hop_key `(stationId,in,out)`.
 
 ---
 

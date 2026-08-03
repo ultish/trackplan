@@ -50,6 +50,23 @@ header p{margin:0;color:var(--sub);font-size:13.5px;max-width:70ch;}
 .legend .swatch{display:inline-flex;align-items:center;gap:6px;}
 .dot{width:11px;height:11px;border-radius:50%;display:inline-block;border:2px solid transparent;}
 
+.scenarioRow{margin:14px 24px 4px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+@media (max-width:900px){ .scenarioRow{grid-template-columns:1fr 1fr;} }
+.scenarioCard{text-align:left;background:var(--panel);border:1.5px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:12px 13px;cursor:pointer;font:inherit;color:var(--ink);display:flex;flex-direction:column;gap:6px;transition:border-color .15s ease;}
+.scenarioCard:hover{border-color:var(--accent);}
+.scenarioCard.active{border-color:var(--accent);background:color-mix(in srgb, var(--accent) 7%, var(--panel));}
+.scenarioCard .topRow{display:flex;align-items:center;justify-content:space-between;gap:6px;}
+.scenarioCard .diffBadge{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:999px;background:var(--chip-bg);color:var(--sub);}
+.scenarioCard .diffBadge.d-simple{color:var(--bound);}
+.scenarioCard .diffBadge.d-medium{color:var(--frontier);}
+.scenarioCard .diffBadge.d-harder{color:var(--current);}
+.scenarioCard .diffBadge.d-hardest{color:var(--failed);}
+.scenarioCard .outBadge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;}
+.scenarioCard .outBadge.sat{background:color-mix(in srgb, var(--bound) 20%, transparent);color:var(--bound);}
+.scenarioCard .outBadge.unsat{background:color-mix(in srgb, var(--failed) 20%, transparent);color:var(--failed);}
+.scenarioCard .scTitle{font-size:13.5px;font-weight:650;}
+.scenarioCard .scDesc{font-size:12px;color:var(--sub);line-height:1.4;}
+
 main{display:grid;grid-template-columns:1.5fr 1fr;gap:14px;padding:8px 24px 4px;align-items:start;}
 @media (max-width:1050px){ main{grid-template-columns:1fr;} }
 
@@ -122,6 +139,8 @@ footer code{background:var(--code-bg);padding:1px 5px;border-radius:5px;}
 .edgePath.alt{stroke-dasharray:5 4;stroke:var(--frontier);opacity:.85;}
 .edgePath.loop{stroke-dasharray:2 5;stroke:var(--goal);opacity:.75;}
 .edgePath.bound{stroke:var(--bound);stroke-width:4;opacity:1;}
+.edgePath.offline{stroke:var(--failed);stroke-dasharray:3 4;opacity:.5;}
+.edgeOfflineLabel{font-size:9px;font-weight:700;fill:var(--failed);}
 .edgeLabel{font-size:9.5px;fill:var(--sub);}
 .pulse{animation:pulse 1.1s ease-in-out infinite;}
 @keyframes pulse{0%{filter:drop-shadow(0 0 0px var(--current));}50%{filter:drop-shadow(0 0 7px var(--current));}100%{filter:drop-shadow(0 0 0px var(--current));}}
@@ -132,10 +151,12 @@ footer code{background:var(--code-bg);padding:1px 5px;border-radius:5px;}
 <header>
   <div>
     <h1>Assembler / Coupler — Interactive Walkthrough</h1>
-    <p>A worked run of the machine-flavor routing problem (A → B → C → D → E) through a fabric of direct links and two 10×10 switches, showing exactly how the Assembler's leg loop and the Coupler's ExpandKey frontier cooperate — including a real backtrack.</p>
+    <p>Four runs over the <em>same</em> machine-flavor fabric (A → B → C → D → E, two 10×10 switches) — from a clean happy path up to a genuine UNSAT — showing exactly how the Assembler's leg loop and the Coupler's ExpandKey frontier cooperate.</p>
   </div>
   <button id="themeBtn" type="button">Toggle theme</button>
 </header>
+
+<div class="scenarioRow" id="scenarioRow"></div>
 
 <div class="legend">
   <span class="swatch"><span class="dot" style="background:var(--idle)"></span> unvisited</span>
@@ -144,7 +165,7 @@ footer code{background:var(--code-bg);padding:1px 5px;border-radius:5px;}
   <span class="swatch"><span class="dot" style="background:var(--bound)"></span> bound (on the current path)</span>
   <span class="swatch"><span class="dot" style="background:var(--failed)"></span> failed inspect</span>
   <span class="swatch"><span class="dot" style="border-color:var(--goal);background:transparent;border-style:dashed"></span> member of this leg's goal set G</span>
-  <span class="swatch">— main link &nbsp; <span style="color:var(--frontier)">┄</span> alt route &nbsp; <span style="color:var(--goal)">┄</span> switch↔switch loopback (2 ports)</span>
+  <span class="swatch">— main link &nbsp; <span style="color:var(--frontier)">┄</span> alt route &nbsp; <span style="color:var(--goal)">┄</span> switch↔switch loopback (2 ports) &nbsp; <span style="color:var(--failed)">┄</span> offline this scenario</span>
 </div>
 
 <div id="stepBar">
@@ -262,13 +283,48 @@ const EDGES = [
 
 const FLAVOR_COLOR = { A:'#2f6fed', B:'#12946b', C:'#8a4fff', D:'#e2a400', E:'#d8395a' };
 const LEGS = ['A','B','C','D','E'];
-const SCRIPTED_FAIL = new Set(['C1','E1']);
 
-const fwdAdj = {}, revAdj = {};
-EDGES.forEach(([f,t,kind,port])=>{
-  (fwdAdj[f] = fwdAdj[f]||[]).push({to:t,kind,port});
-  (revAdj[t] = revAdj[t]||[]).push(f);
-});
+/* ================= SCENARIOS =================
+   Same physical fabric every time — only which stations fail inspect,
+   and which links are temporarily offline, changes between scenarios. */
+const SCENARIOS = [
+  {
+    id: 'simple', label: '1 · Simple', difficulty: 'Simple', diffClass: 'd-simple',
+    title: 'Happy path — every leg first-fit',
+    description: 'All five legs bind on the very first candidate Coupler reaches. No inspect failures, no offline links, no backtrack — just the bare ExpandKey mechanics (ties, checkpoint timing).',
+    scriptedFail: [], offlineEdges: [],
+  },
+  {
+    id: 'backtrack', label: '2 · Backtrack', difficulty: 'Medium', diffClass: 'd-medium',
+    title: 'Checkpoint-timing backtrack + in-call recovery',
+    description: 'C1 fails inspect after B1 is bound — but B was never checkpointed yet, so Assembler backtracks and retries B2. Later E1 fails and Coupler recovers to E2 inside the same frontier, no Assembler round-trip.',
+    scriptedFail: ['C1','E1'], offlineEdges: [],
+  },
+  {
+    id: 'loopback', label: '3 · Harder', difficulty: 'Harder', diffClass: 'd-harder',
+    title: 'Both short routes to D1 down — forced through 2 switches',
+    description: 'B2’s link to Switch2, the direct C1→D1 link, and the short Switch2→D1 link are all offline. The only surviving route is A1→Switch1→B1→C1→Switch2→Switch1→D1 — the fabric’s one 2-consecutive-switch corridor, over the narrow loopback trunk.',
+    scriptedFail: [], offlineEdges: [['B2','Switch2'], ['C1','D1'], ['Switch2','D1']],
+  },
+  {
+    id: 'unsat', label: '4 · UNSAT', difficulty: 'Hardest', diffClass: 'd-hardest',
+    title: 'Checkpoint forecloses recovery — booking fails',
+    description: 'Both C1 and C2 fail inspect. After B’s alts (B1, then B2) are exhausted, the only thing left to retry would be A2 — but A was already checkpointed when B1 first succeeded, and a checkpointed type can never reopen. Backtrack has nowhere to go: UNSAT.',
+    scriptedFail: ['C1','C2'], offlineEdges: [],
+  },
+];
+
+let fwdAdj = {}, revAdj = {}, SCRIPTED_FAIL = new Set(), DIST_TO_TERMINAL = {}, ACTIVE_OFFLINE = new Set();
+
+function buildAdjacency(offlineEdges){
+  ACTIVE_OFFLINE = new Set((offlineEdges||[]).map(([f,t])=>f+'|'+t));
+  fwdAdj = {}; revAdj = {};
+  EDGES.forEach(([f,t,kind,port])=>{
+    if(ACTIVE_OFFLINE.has(f+'|'+t)) return;
+    (fwdAdj[f] = fwdAdj[f]||[]).push({to:t,kind,port});
+    (revAdj[t] = revAdj[t]||[]).push(f);
+  });
+}
 
 function multiSourceBFS(sources){
   const dist = {};
@@ -283,7 +339,6 @@ function multiSourceBFS(sources){
   }
   return dist;
 }
-const DIST_TO_TERMINAL = multiSourceBFS(Object.keys(NODES).filter(id=>NODES[id].flavor==='E'));
 
 function computeGoalSet(tail, flavor){
   const seen = new Set([tail]);
@@ -339,18 +394,22 @@ function expandKeyCompare(a,b){
 }
 
 /* ================= SIMULATION ================= */
-const STEPS = [];
-const state = {
-  boundPath: ['S0'],
-  bindings: {},
-  undone: [],
-  failedForever: [],
-  checkpointed: {},
-  altsByFlavor: {},
-  context: {},
-  legFlavor: null,
-  callNumber: 0,
-};
+let STEPS = [];
+function freshState(){
+  return {
+    boundPath: ['S0'],
+    bindings: {},
+    undone: [],
+    failedForever: [],
+    checkpointed: {},
+    altsByFlavor: {},
+    context: {},
+    legFlavor: null,
+    callNumber: 0,
+  };
+}
+let state = freshState();
+let LAST_OUTCOME = null; // 'SAT' | 'UNSAT', set once runAssembler finishes
 const KIND_COLOR = {
   leg_start:'#8c93a8', call_start:'#2f6fed', expand:'#e2a400',
   'inspect-pass':'#12946b', 'inspect-fail':'#d8395a', leg_success:'#12946b',
@@ -476,6 +535,7 @@ function runAssembler(){
           `${last.flavor} is the last leg and the booking is now SAT — checkpoint immediately.`, {flavor:last.flavor});
         pushStep('booking_sat', 'Booking SAT',
           `All legs bound: ${LEGS.map(f=>`${f}=${state.bindings[f]}`).join(', ')}.`, {});
+        LAST_OUTCOME = 'SAT';
       }
     } else {
       pushStep('leg_fail', `Leg ${flavor} exhausted`,
@@ -503,12 +563,12 @@ function runAssembler(){
       }
       if(!backtracked){
         pushStep('dead_end', 'Booking UNSAT', 'No checkpoint-eligible alts remain anywhere on the stack. Resolve fails.', {});
+        LAST_OUTCOME = 'UNSAT';
         return;
       }
     }
   }
 }
-runAssembler();
 
 /* ================= RENDERING ================= */
 const svg = document.getElementById('topology');
@@ -538,12 +598,18 @@ function buildStaticSvg(){
   let edgeHtml = '';
   EDGES.forEach(([f,t,kind,port])=>{
     const d = pathD(f,t,kind);
-    const cls = kind==='alt'?'alt':(kind==='loop'?'loop':'main');
+    const offline = ACTIVE_OFFLINE.has(f+'|'+t);
+    const cls = (offline ? 'offline ' : '') + (kind==='alt'?'alt':(kind==='loop'?'loop':'main'));
     edgeHtml += `<path class="edgePath ${cls}" data-edge="${f}|${t}" d="${d}" marker-end="url(#arrow)"></path>`;
     if(port){
       const a=NODES[f], b=NODES[t];
       const lx=(a.x+b.x)/2, ly=(a.y+b.y)/2 - (kind==='alt'?40:(kind==='loop'?0:-8));
       edgeHtml += `<text class="edgeLabel" x="${lx}" y="${ly}">${port}</text>`;
+    }
+    if(offline){
+      const a=NODES[f], b=NODES[t];
+      const lx=(a.x+b.x)/2, ly=(a.y+b.y)/2 + (kind==='alt'?18:(kind==='loop'?14:14));
+      edgeHtml += `<text class="edgeOfflineLabel" x="${lx}" y="${ly}">OFFLINE</text>`;
     }
   });
   let nodeHtml = '';
@@ -570,7 +636,6 @@ function buildStaticSvg(){
   });
   svg.innerHTML = defs + `<g id="edgeLayer">${edgeHtml}</g><g id="nodeLayer">${nodeHtml}</g>`;
 }
-buildStaticSvg();
 
 function setNodeState(id, mode){
   const g = svg.querySelector(`g[data-node="${id}"]`);
@@ -740,8 +805,52 @@ document.addEventListener('keydown', e=>{
   if(e.key==='ArrowLeft'){ stopPlay(); prev(); }
 });
 
-document.getElementById('scrubber').max = STEPS.length-1;
-render();
+/* ================= SCENARIO SWITCHING ================= */
+let activeScenarioId = null;
+
+function runScenarioSilently(scenario){
+  buildAdjacency(scenario.offlineEdges);
+  DIST_TO_TERMINAL = multiSourceBFS(Object.keys(NODES).filter(id=>NODES[id].flavor==='E'));
+  SCRIPTED_FAIL = new Set(scenario.scriptedFail);
+  state = freshState();
+  STEPS = [];
+  LAST_OUTCOME = null;
+  runAssembler();
+  return { outcome: LAST_OUTCOME, stepCount: STEPS.length };
+}
+// Precompute outcome + step count for every scenario up front so all four cards show a badge immediately.
+SCENARIOS.forEach(sc=>{ const r = runScenarioSilently(sc); sc.outcome = r.outcome; sc.stepCount = r.stepCount; });
+
+function renderScenarioRow(){
+  const wrap = document.getElementById('scenarioRow');
+  wrap.innerHTML = SCENARIOS.map(sc=>`
+    <button class="scenarioCard ${sc.id===activeScenarioId?'active':''}" data-scenario="${sc.id}">
+      <div class="topRow">
+        <span class="diffBadge ${sc.diffClass}">${sc.difficulty}</span>
+        <span class="outBadge ${sc.outcome==='SAT'?'sat':'unsat'}">${sc.outcome} · ${sc.stepCount} steps</span>
+      </div>
+      <div class="scTitle">${sc.title}</div>
+      <div class="scDesc">${sc.description}</div>
+    </button>`).join('');
+  wrap.querySelectorAll('.scenarioCard').forEach(btn=>{
+    btn.addEventListener('click', ()=>loadScenario(btn.dataset.scenario));
+  });
+}
+
+function loadScenario(id){
+  stopPlay();
+  const scenario = SCENARIOS.find(s=>s.id===id);
+  if(!scenario) return;
+  activeScenarioId = id;
+  runScenarioSilently(scenario); // rebuilds fwdAdj/revAdj/DIST_TO_TERMINAL/SCRIPTED_FAIL/state/STEPS for real use
+  buildStaticSvg();
+  currentIndex = 0;
+  document.getElementById('scrubber').max = STEPS.length-1;
+  renderScenarioRow();
+  render();
+}
+
+loadScenario('simple');
 </script>
 </body>
 </html>

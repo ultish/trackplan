@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Assembler / Coupler — Interactive Walkthrough</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{
+  --bg:#f6f7fb; --panel:#ffffff; --ink:#1c2130; --sub:#5b6272; --line:#e1e4ec;
+  --accent:#2f6fed; --accent-ink:#ffffff;
+  --goal:#8a4fff; --bound:#12946b; --frontier:#e2a400; --current:#e0501a; --failed:#d8395a; --idle:#c7cbd6;
+  --switchfill:#eef1fa; --switchline:#8c93a8;
+  --chip-bg:#eef1fa; --code-bg:#f1f3f9;
+  --shadow: 0 1px 2px rgba(20,24,40,.06), 0 8px 24px rgba(20,24,40,.06);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#14161f; --panel:#1b1e29; --ink:#eef0f6; --sub:#9aa1b4; --line:#2b2f3d;
+    --accent:#6d9bff; --accent-ink:#0c0f16;
+    --goal:#b58bff; --bound:#3fd6a3; --frontier:#f3b93a; --current:#ff8452; --failed:#ff6b8b; --idle:#3a3f52;
+    --switchfill:#232739; --switchline:#5a6180;
+    --chip-bg:#242938; --code-bg:#20242f;
+    --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 28px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14161f; --panel:#1b1e29; --ink:#eef0f6; --sub:#9aa1b4; --line:#2b2f3d;
+  --accent:#6d9bff; --accent-ink:#0c0f16;
+  --goal:#b58bff; --bound:#3fd6a3; --frontier:#f3b93a; --current:#ff8452; --failed:#ff6b8b; --idle:#3a3f52;
+  --switchfill:#232739; --switchline:#5a6180;
+  --chip-bg:#242938; --code-bg:#20242f;
+  --shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 28px rgba(0,0,0,.35);
+}
+:root[data-theme="light"]{
+  --bg:#f6f7fb; --panel:#ffffff; --ink:#1c2130; --sub:#5b6272; --line:#e1e4ec;
+  --accent:#2f6fed; --accent-ink:#ffffff;
+  --goal:#8a4fff; --bound:#12946b; --frontier:#e2a400; --current:#e0501a; --failed:#d8395a; --idle:#c7cbd6;
+  --switchfill:#eef1fa; --switchline:#8c93a8;
+  --chip-bg:#eef1fa; --code-bg:#f1f3f9;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;}
+body{overflow-x:hidden;}
+header{padding:20px 24px 8px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;}
+header h1{font-size:20px;margin:0 0 4px;}
+header p{margin:0;color:var(--sub);font-size:13.5px;max-width:70ch;}
+#themeBtn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:12.5px;}
+
+.legend{margin:8px 24px 4px;display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12.5px;color:var(--sub);align-items:center;}
+.legend .swatch{display:inline-flex;align-items:center;gap:6px;}
+.dot{width:11px;height:11px;border-radius:50%;display:inline-block;border:2px solid transparent;}
+
+main{display:grid;grid-template-columns:1.5fr 1fr;gap:14px;padding:8px 24px 4px;align-items:start;}
+@media (max-width:1050px){ main{grid-template-columns:1fr;} }
+
+#diagramCard{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:10px 10px 4px;}
+#topology{width:100%;height:auto;display:block;}
+
+.legrow{display:flex;gap:6px;padding:8px 6px 2px;flex-wrap:wrap;}
+.legchip{border:1px solid var(--line);border-radius:999px;padding:5px 10px;font-size:12.5px;color:var(--sub);background:var(--chip-bg);display:flex;align-items:center;gap:6px;}
+.legchip.active{border-color:var(--accent);color:var(--ink);background:color-mix(in srgb, var(--accent) 14%, var(--chip-bg));font-weight:600;}
+.legchip .lock{font-size:11px;}
+.legchip .stn{color:var(--sub);font-weight:400;}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:14px 16px;margin-bottom:14px;}
+.panel h2{font-size:12.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--sub);margin:0 0 10px;display:flex;align-items:center;justify-content:space-between;}
+.panel h2 .tag{font-size:10.5px;text-transform:none;letter-spacing:0;background:var(--chip-bg);border-radius:6px;padding:2px 7px;color:var(--sub);}
+
+#stepBar{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 24px;border-bottom:1px solid var(--line);}
+#stepBox{background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:12px 16px;}
+#stepKindBadge{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:6px;margin-bottom:6px;color:#fff;}
+#stepTitle{font-size:15px;font-weight:650;margin:0 0 4px;}
+#stepDetail{font-size:13.5px;color:var(--sub);margin:0;}
+
+.controlsRow{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;}
+.controlsRow button{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:7px 12px;cursor:pointer;font-size:13px;display:inline-flex;align-items:center;gap:6px;}
+.controlsRow button:hover{border-color:var(--accent);}
+.controlsRow button:disabled{opacity:.4;cursor:not-allowed;}
+.controlsRow button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600;}
+#scrubber{flex:1;min-width:140px;accent-color:var(--accent);}
+#stepCounter{font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--sub);white-space:nowrap;}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px;}
+th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line);white-space:nowrap;}
+th{color:var(--sub);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.02em;}
+tr.chosenRow{background:color-mix(in srgb, var(--bound) 16%, transparent);}
+tr.chosenRow td:first-child{font-weight:700;}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:13px;}
+.kv dt{color:var(--sub);}
+.kv dd{margin:0;}
+
+.badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:6px;background:var(--chip-bg);color:var(--sub);}
+.badge.on{background:color-mix(in srgb, var(--bound) 20%, transparent);color:var(--bound);}
+.badge.off{opacity:.55;}
+
+.altList{list-style:none;margin:4px 0 0;padding:0;font-size:12.5px;}
+.altList li{padding:3px 0;display:flex;justify-content:space-between;color:var(--sub);}
+.altList li b{color:var(--ink);font-weight:600;}
+
+pre.contextBlock{margin:0;background:var(--code-bg);border-radius:8px;padding:10px 12px;font-size:12px;overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
+
+#logList{max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;}
+.logItem{text-align:left;border:none;background:transparent;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:12.5px;color:var(--sub);display:flex;gap:8px;align-items:baseline;}
+.logItem:hover{background:var(--chip-bg);}
+.logItem.here{background:color-mix(in srgb, var(--accent) 16%, transparent);color:var(--ink);font-weight:600;}
+.logItem .n{font-variant-numeric:tabular-nums;color:var(--sub);width:24px;flex:none;}
+.logItem .kdot{width:7px;height:7px;border-radius:50%;flex:none;}
+
+footer{padding:20px 24px 60px;color:var(--sub);font-size:12px;max-width:90ch;}
+footer code{background:var(--code-bg);padding:1px 5px;border-radius:5px;}
+
+/* svg node styling */
+.nodeCircle{stroke-width:2.5;transition:all .25s ease;}
+.nodeLabel{font-size:13px;font-weight:700;fill:var(--ink);text-anchor:middle;pointer-events:none;}
+.nodeSub{font-size:9px;fill:var(--sub);text-anchor:middle;pointer-events:none;}
+.switchRect{stroke-width:2.5;transition:all .25s ease;}
+.switchLabel{font-size:12px;font-weight:700;fill:var(--ink);text-anchor:middle;pointer-events:none;}
+.switchSub{font-size:9px;fill:var(--sub);text-anchor:middle;pointer-events:none;}
+.edgePath{fill:none;stroke:var(--idle);stroke-width:1.6;}
+.edgePath.alt{stroke-dasharray:5 4;stroke:var(--frontier);opacity:.85;}
+.edgePath.loop{stroke-dasharray:2 5;stroke:var(--goal);opacity:.75;}
+.edgePath.bound{stroke:var(--bound);stroke-width:4;opacity:1;}
+.edgeLabel{font-size:9.5px;fill:var(--sub);}
+.pulse{animation:pulse 1.1s ease-in-out infinite;}
+@keyframes pulse{0%{filter:drop-shadow(0 0 0px var(--current));}50%{filter:drop-shadow(0 0 7px var(--current));}100%{filter:drop-shadow(0 0 0px var(--current));}}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Assembler / Coupler — Interactive Walkthrough</h1>
+    <p>A worked run of the machine-flavor routing problem (A → B → C → D → E) through a fabric of direct links and two 10×10 switches, showing exactly how the Assembler's leg loop and the Coupler's ExpandKey frontier cooperate — including a real backtrack.</p>
+  </div>
+  <button id="themeBtn" type="button">Toggle theme</button>
+</header>
+
+<div class="legend">
+  <span class="swatch"><span class="dot" style="background:var(--idle)"></span> unvisited</span>
+  <span class="swatch"><span class="dot" style="border-color:var(--frontier);background:transparent"></span> in frontier</span>
+  <span class="swatch"><span class="dot" style="background:var(--current)"></span> being popped / inspected now</span>
+  <span class="swatch"><span class="dot" style="background:var(--bound)"></span> bound (on the current path)</span>
+  <span class="swatch"><span class="dot" style="background:var(--failed)"></span> failed inspect</span>
+  <span class="swatch"><span class="dot" style="border-color:var(--goal);background:transparent;border-style:dashed"></span> member of this leg's goal set G</span>
+  <span class="swatch">— main link &nbsp; <span style="color:var(--frontier)">┄</span> alt route &nbsp; <span style="color:var(--goal)">┄</span> switch↔switch loopback (2 ports)</span>
+</div>
+
+<div id="stepBar">
+  <div id="stepBox">
+    <span id="stepKindBadge">STEP</span>
+    <div id="stepTitle">—</div>
+    <div id="stepDetail">—</div>
+    <div class="controlsRow">
+      <button id="btnFirst" title="First step">⏮ First</button>
+      <button id="btnPrev" title="Previous (←)">◀ Prev</button>
+      <button id="btnPlay" class="primary" title="Auto-play">▶ Play</button>
+      <button id="btnNext" title="Next (→)">Next ▶</button>
+      <button id="btnLast" title="Last step">Last ⏭</button>
+      <input type="range" id="scrubber" min="0" max="0" value="0">
+      <span id="stepCounter">1 / 1</span>
+    </div>
+  </div>
+</div>
+
+<main>
+  <div>
+    <div id="diagramCard">
+      <svg id="topology" viewBox="0 0 1300 520" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div class="legrow" id="legProgress"></div>
+    </div>
+
+    <div class="panel" id="panel-context" style="margin-top:14px;">
+      <h2>Task.context <span class="tag">Inspector-written, accumulates hop by hop</span></h2>
+      <pre class="contextBlock" id="contextBlock">{}</pre>
+      <div class="kv" id="bindingsKv" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel" id="panel-assembler">
+      <h2>Assembler <span class="tag">outer — legs, checkpoints, alts</span></h2>
+      <div class="kv" id="assemblerKv"></div>
+      <div id="altsBox" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="panel" id="panel-coupler">
+      <h2>Coupler <span class="tag">inner — one ExpandKey frontier per leg</span></h2>
+      <div class="kv" id="couplerKv" style="margin-bottom:8px;"></div>
+      <div id="frontierTableWrap">
+        <table id="frontierTable">
+          <thead><tr>
+            <th>node</th><th>g</th><th>inUse</th><th>¬transp.</th><th>dist→G</th><th>dist→term</th><th>rank</th><th>name</th>
+          </tr></thead>
+          <tbody id="frontierTbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-log">
+      <h2>Event log <span class="tag" id="logCountTag">0 steps</span></h2>
+      <div id="logList"></div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <p><b>Reading the frontier table:</b> rows are sorted exactly the way Coupler sorts them — <code>g</code> ascending first (Trackplan's edges are all unit-cost, so lowest <code>g</code> is always the shortest path — no <code>f = g + h</code> blending needed), then the <b>ExpandKey</b> tuple as a pure tie-break: prefer already-in-use, prefer non-transparent (a real goal over more fabric), prefer lower optimistic distance to this leg's goal set, prefer lower optimistic distance to the terminal type, prefer higher NeighborRank, and finally prefer lexicographically-earlier name. The highlighted row is the one Coupler actually pops next.</p>
+  <p><b>Topology notes:</b> 5 machine flavors (A–E), 2 switches (Switch1, Switch2), each nominally 10×10 ports — only the ports this run actually uses are labelled. The Switch2→Switch1 return trunk is wired on 2 ports only, and the longest corridor in this fabric uses exactly 2 consecutive switches (Switch2 then Switch1) to reach D1 the long way — the fabric never chains 3 switches in a row. Not every edge drawn is exercised by this particular run; some exist purely to show path diversity (e.g. C1 can reach D1 directly, via Switch2, or via both switches) the way real fabric usually has more capacity than any one booking needs.</p>
+</footer>
+
+<script>
+/* ---------- theme toggle ---------- */
+(function(){
+  const btn = document.getElementById('themeBtn');
+  btn.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme');
+    const mql = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    const next = (cur === 'dark' || (!cur && mql === 'dark')) ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+  });
+})();
+
+/* ================= GRAPH DEFINITION ================= */
+const NODES = {
+  S0:      {x:50,  y:270, flavor:null, transparent:false, virtual:true, label:'S0', sub:'virtual start'},
+  A1:      {x:200, y:120, flavor:'A', transparent:false, label:'A1'},
+  A2:      {x:200, y:420, flavor:'A', transparent:false, label:'A2'},
+  Switch1: {x:365, y:270, flavor:null, transparent:true, label:'Switch1', sub:'10×10 ports', isSwitch:true},
+  B1:      {x:540, y:120, flavor:'B', transparent:false, label:'B1'},
+  B2:      {x:540, y:420, flavor:'B', transparent:false, label:'B2'},
+  Switch2: {x:715, y:355, flavor:null, transparent:true, label:'Switch2', sub:'10×10 ports', isSwitch:true},
+  C1:      {x:890, y:120, flavor:'C', transparent:false, label:'C1'},
+  C2:      {x:890, y:420, flavor:'C', transparent:false, label:'C2'},
+  D1:      {x:1050,y:230, flavor:'D', transparent:false, label:'D1'},
+  D2:      {x:1050,y:420, flavor:'D', transparent:false, label:'D2'},
+  E1:      {x:1210,y:230, flavor:'E', transparent:false, label:'E1'},
+  E2:      {x:1210,y:420, flavor:'E', transparent:false, label:'E2'},
+};
+
+const EDGES = [
+  ['S0','A1','main',''],
+  ['S0','A2','main',''],
+  ['A1','Switch1','main','in.1'],
+  ['A2','Switch1','main','in.2'],
+  ['Switch1','B1','main','out.1'],
+  ['Switch1','B2','main','out.2'],
+  ['B1','C1','main',''],
+  ['B2','Switch2','main','in.1'],
+  ['Switch2','C2','main','out.1'],
+  ['C1','D1','main',''],
+  ['C1','Switch2','alt','in.2'],
+  ['Switch2','D1','alt','out.2'],
+  ['Switch2','Switch1','loop','out.9→in.9 (2-port trunk)'],
+  ['Switch1','D1','loop','out.9'],
+  ['C2','D2','main',''],
+  ['D1','E1','main',''],
+  ['D2','E1','main',''],
+  ['D2','E2','main',''],
+];
+
+const FLAVOR_COLOR = { A:'#2f6fed', B:'#12946b', C:'#8a4fff', D:'#e2a400', E:'#d8395a' };
+const LEGS = ['A','B','C','D','E'];
+const SCRIPTED_FAIL = new Set(['C1','E1']);
+
+const fwdAdj = {}, revAdj = {};
+EDGES.forEach(([f,t,kind,port])=>{
+  (fwdAdj[f] = fwdAdj[f]||[]).push({to:t,kind,port});
+  (revAdj[t] = revAdj[t]||[]).push(f);
+});
+
+function multiSourceBFS(sources){
+  const dist = {};
+  const q = [];
+  sources.forEach(s=>{ if(!(s in dist)){ dist[s]=0; q.push(s);} });
+  let head=0;
+  while(head<q.length){
+    const cur=q[head++];
+    for(const prev of (revAdj[cur]||[])){
+      if(!(prev in dist)){ dist[prev]=dist[cur]+1; q.push(prev); }
+    }
+  }
+  return dist;
+}
+const DIST_TO_TERMINAL = multiSourceBFS(Object.keys(NODES).filter(id=>NODES[id].flavor==='E'));
+
+function computeGoalSet(tail, flavor){
+  const seen = new Set([tail]);
+  const q = [tail];
+  const goals = [];
+  let head=0;
+  while(head<q.length){
+    const cur=q[head++];
+    for(const e of (fwdAdj[cur]||[])){
+      const child=e.to;
+      if(seen.has(child)) continue;
+      seen.add(child);
+      const cn = NODES[child];
+      if(cn.flavor === flavor){ goals.push(child); }
+      else if(cn.transparent){ q.push(child); }
+      /* else: non-transparent, non-matching flavor -> dead end for this call, not traversed */
+    }
+  }
+  return goals;
+}
+
+function reconstructPath(node, parent, tail){
+  const chain=[node];
+  let cur=node;
+  while(parent[cur]!==undefined && cur!==tail){ cur=parent[cur]; chain.push(cur); }
+  chain.reverse();
+  if(chain[0]!==tail) chain.unshift(tail);
+  return chain;
+}
+
+function expandKeyRow(nodeId, g, distSeg){
+  const n = NODES[nodeId];
+  return {
+    node: nodeId, g,
+    preferInUse: 0,
+    preferNonTransparent: n.transparent ? 0 : 1,
+    distSeg: (distSeg[nodeId] === undefined ? '∞' : distSeg[nodeId]),
+    distTerm: (DIST_TO_TERMINAL[nodeId] === undefined ? '∞' : DIST_TO_TERMINAL[nodeId]),
+    rank: 0,
+    name: nodeId,
+  };
+}
+function expandKeyCompare(a,b){
+  if(a.g!==b.g) return a.g-b.g;
+  if(a.preferInUse!==b.preferInUse) return b.preferInUse-a.preferInUse;
+  if(a.preferNonTransparent!==b.preferNonTransparent) return b.preferNonTransparent-a.preferNonTransparent;
+  const as = a.distSeg==='∞'?Infinity:a.distSeg, bs = b.distSeg==='∞'?Infinity:b.distSeg;
+  if(as!==bs) return as-bs;
+  const at = a.distTerm==='∞'?Infinity:a.distTerm, bt = b.distTerm==='∞'?Infinity:b.distTerm;
+  if(at!==bt) return at-bt;
+  if(a.rank!==b.rank) return b.rank-a.rank;
+  return a.name<b.name?-1:(a.name>b.name?1:0);
+}
+
+/* ================= SIMULATION ================= */
+const STEPS = [];
+const state = {
+  boundPath: ['S0'],
+  bindings: {},
+  undone: [],
+  failedForever: [],
+  checkpointed: {},
+  altsByFlavor: {},
+  context: {},
+  legFlavor: null,
+  callNumber: 0,
+};
+const KIND_COLOR = {
+  leg_start:'#8c93a8', call_start:'#2f6fed', expand:'#e2a400',
+  'inspect-pass':'#12946b', 'inspect-fail':'#d8395a', leg_success:'#12946b',
+  leg_fail:'#d8395a', checkpoint:'#8a4fff', backtrack:'#e0501a', booking_sat:'#12946b', dead_end:'#d8395a',
+};
+
+function clone(x){ return JSON.parse(JSON.stringify(x)); }
+function pushStep(kind, title, detail, extra){
+  STEPS.push({ kind, title, detail, extra: extra||{}, snapshot: clone(state) });
+}
+
+function runCouplerCall(flavor, tail, forcedG){
+  state.callNumber++;
+  state.legFlavor = flavor;
+  const G = forcedG || computeGoalSet(tail, flavor);
+  const distSeg = multiSourceBFS(G);
+  const goalNote = forcedG
+    ? `Tail = ${tail}. This is a backtrack retry — Assembler restricts the goal set to the remaining alts only: G = { ${G.join(', ')} }. (Already-tried candidates from the earlier call are not reoffered.)`
+    : `Tail = ${tail}. Assembler hands Coupler a multi-sink goal set built from Oracle++ reachability: G = { ${G.join(', ')} }.`;
+  pushStep('call_start', `Coupler call #${state.callNumber} — leg ${flavor}`, goalNote,
+    { tail, G, flavor });
+
+  let frontier = [];
+  const closed = new Set();
+  const parent = {};
+
+  function expandFrom(node, g){
+    for(const e of (fwdAdj[node]||[])){
+      const child = e.to;
+      if(closed.has(child)) continue;
+      const cn = NODES[child];
+      const isGoal = cn.flavor === flavor && G.includes(child);
+      const isTransparent = !!cn.transparent;
+      if(!isGoal && !isTransparent) continue;
+      if(distSeg[child] === undefined) continue;
+      if(!(child in parent)) parent[child] = node;
+      frontier.push({node: child, g: g+1});
+    }
+  }
+  expandFrom(tail, 0);
+
+  let result = null;
+  const failedThisCall = [];
+  while(frontier.length && !result){
+    frontier = frontier.filter(f=>!closed.has(f.node));
+    const rows = frontier.map(f=>expandKeyRow(f.node, f.g, distSeg));
+    rows.sort(expandKeyCompare);
+    if(!rows.length) break;
+    const chosen = rows[0];
+    frontier = frontier.filter(f=>!(f.node===chosen.node && f.g===chosen.g));
+    if(closed.has(chosen.node)) continue;
+    closed.add(chosen.node);
+    const n = NODES[chosen.node];
+
+    if(n.transparent){
+      const stampKey = `via_${chosen.node}`;
+      state.context[stampKey] = true;
+      const before = rows.map(r=>({...r, chosen: r.node===chosen.node}));
+      expandFrom(chosen.node, chosen.g);
+      const pushedNow = frontier.filter(f=>f.g===chosen.g+1).map(f=>f.node);
+      pushStep('expand', `Pass through ${chosen.node} (transparent)`,
+        `${chosen.node} inspected on this transparent visit — OK (C2d). Context stamp written: ${stampKey}=true. Legal children pushed: ${pushedNow.length? pushedNow.join(', ') : '(none — dead end)'}.`,
+        { popped: chosen.node, table: before, G, flavor, tail });
+    } else {
+      const willFail = SCRIPTED_FAIL.has(chosen.node);
+      const before = rows.map(r=>({...r, chosen: r.node===chosen.node}));
+      if(willFail){
+        failedThisCall.push(chosen.node);
+        state.failedForever.push(chosen.node);
+        pushStep('inspect-fail', `Inspect FAIL — ${chosen.node}`,
+          `${chosen.node} reached at g=${chosen.g} but failed inspect. It stays inside this same ExpandKey frontier — Coupler keeps going, no round-trip to Assembler.`,
+          { popped: chosen.node, table: before, G, flavor, tail });
+      } else {
+        pushStep('inspect-pass', `Inspect OK — ${chosen.node}`,
+          `${chosen.node} reached at g=${chosen.g} and passed inspect. First-fit: Coupler returns immediately with this winner.`,
+          { popped: chosen.node, table: before, G, flavor, tail });
+        result = { success:true, winner: chosen.node, path: reconstructPath(chosen.node, parent, tail) };
+      }
+    }
+  }
+  if(!result) result = { success:false, failedSamples: failedThisCall.slice(0,3) };
+  return { result, G };
+}
+
+function checkpointIfDue(legStack){
+  if(legStack.length>=2){
+    const prev = legStack[legStack.length-2];
+    if(!state.checkpointed[prev.flavor]){
+      state.checkpointed[prev.flavor] = true;
+      pushStep('checkpoint', `Checkpoint — ${prev.flavor}`,
+        `StationType ${prev.flavor} is checkpointed now that its next leg has a successful working Task: its station (${prev.chosenStation}) is frozen for this booking and its alts are discarded.`,
+        { flavor: prev.flavor });
+    }
+  }
+}
+
+function runAssembler(){
+  let legStack = [];
+  let i = 0;
+  let currentTail = 'S0';
+  let pendingG = null; // set on backtrack retry: restrict the next call to the remaining alts only
+  while(i < LEGS.length){
+    const flavor = LEGS[i];
+    pushStep('leg_start', `Leg ${flavor} begins`, `Assembler starts the ${flavor} leg from tail ${currentTail}.`, {flavor});
+    const { result, G } = runCouplerCall(flavor, currentTail, pendingG);
+    pendingG = null;
+    if(result.success){
+      const unused = G.filter(g=>g!==result.winner && !state.failedForever.includes(g));
+      legStack.push({ flavor, chosenStation: result.winner, alts: unused, tailBefore: currentTail, boundPathLenBefore: state.boundPath.length });
+      state.bindings[flavor] = result.winner;
+      state.altsByFlavor[flavor] = unused;
+      state.boundPath = state.boundPath.concat(result.path.slice(1));
+      currentTail = result.winner;
+      pushStep('leg_success', `Leg ${flavor} bound to ${result.winner}`,
+        `Unused goals kept as alts for backtrack: { ${unused.join(', ') || 'none'} }.`,
+        { flavor, chosen: result.winner, alts: unused });
+      i++;
+      checkpointIfDue(legStack);
+      if(i === LEGS.length){
+        const last = legStack[legStack.length-1];
+        state.checkpointed[last.flavor] = true;
+        pushStep('checkpoint', `Checkpoint — ${last.flavor} (terminal)`,
+          `${last.flavor} is the last leg and the booking is now SAT — checkpoint immediately.`, {flavor:last.flavor});
+        pushStep('booking_sat', 'Booking SAT',
+          `All legs bound: ${LEGS.map(f=>`${f}=${state.bindings[f]}`).join(', ')}.`, {});
+      }
+    } else {
+      pushStep('leg_fail', `Leg ${flavor} exhausted`,
+        `Goal set G = { ${G.join(', ')} } was fully tried inside one Coupler call; every candidate failed inspect. FailureReport sample (capped, not the full frontier): ${JSON.stringify(result.failedSamples)}.`,
+        { flavor });
+      let backtracked = false;
+      while(legStack.length){
+        const top = legStack[legStack.length-1];
+        if(state.checkpointed[top.flavor]) break;
+        if(top.alts.length){
+          pushStep('backtrack', `Backtrack to leg ${top.flavor}`,
+            `Leg ${flavor} has no candidates left. ${top.flavor} was never checkpointed (its next leg hadn't succeeded yet), so its alts are still usable — retry with { ${top.alts.join(', ')} } from tail ${top.tailBefore}.`,
+            { toFlavor: top.flavor, undone: top.chosenStation });
+          state.undone.push(top.chosenStation);
+          state.boundPath = state.boundPath.slice(0, top.boundPathLenBefore);
+          currentTail = top.tailBefore;
+          i = LEGS.indexOf(top.flavor);
+          pendingG = top.alts;
+          legStack.pop();
+          backtracked = true;
+          break;
+        } else {
+          legStack.pop();
+        }
+      }
+      if(!backtracked){
+        pushStep('dead_end', 'Booking UNSAT', 'No checkpoint-eligible alts remain anywhere on the stack. Resolve fails.', {});
+        return;
+      }
+    }
+  }
+}
+runAssembler();
+
+/* ================= RENDERING ================= */
+const svg = document.getElementById('topology');
+function pathD(fromId, toId, kind){
+  const a = NODES[fromId], b = NODES[toId];
+  if(kind==='loop'){
+    const midx = (a.x+b.x)/2, dir = a.y>350||b.y>350? 1:1;
+    const cy = 500;
+    return `M ${a.x} ${a.y} Q ${midx} ${cy} ${b.x} ${b.y}`;
+  }
+  if(kind==='alt'){
+    const midx=(a.x+b.x)/2, midy=(a.y+b.y)/2 - 55;
+    return `M ${a.x} ${a.y} Q ${midx} ${midy} ${b.x} ${b.y}`;
+  }
+  return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+}
+
+function buildStaticSvg(){
+  let defs = `<defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--idle)"></path>
+    </marker>
+    <marker id="arrowBound" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--bound)"></path>
+    </marker>
+  </defs>`;
+  let edgeHtml = '';
+  EDGES.forEach(([f,t,kind,port])=>{
+    const d = pathD(f,t,kind);
+    const cls = kind==='alt'?'alt':(kind==='loop'?'loop':'main');
+    edgeHtml += `<path class="edgePath ${cls}" data-edge="${f}|${t}" d="${d}" marker-end="url(#arrow)"></path>`;
+    if(port){
+      const a=NODES[f], b=NODES[t];
+      const lx=(a.x+b.x)/2, ly=(a.y+b.y)/2 - (kind==='alt'?40:(kind==='loop'?0:-8));
+      edgeHtml += `<text class="edgeLabel" x="${lx}" y="${ly}">${port}</text>`;
+    }
+  });
+  let nodeHtml = '';
+  Object.entries(NODES).forEach(([id,n])=>{
+    if(id==='S0'){
+      nodeHtml += `<g data-node="S0">
+        <circle class="nodeCircle" cx="${n.x}" cy="${n.y}" r="18" fill="var(--panel)" stroke="var(--idle)"></circle>
+        <text class="nodeLabel" x="${n.x}" y="${n.y+4}">S0</text>
+        <text class="nodeSub" x="${n.x}" y="${n.y+34}">${n.sub}</text>
+      </g>`;
+    } else if(n.isSwitch){
+      nodeHtml += `<g data-node="${id}">
+        <rect class="switchRect" x="${n.x-46}" y="${n.y-30}" width="92" height="60" rx="12" fill="var(--switchfill)" stroke="var(--switchline)"></rect>
+        <text class="switchLabel" x="${n.x}" y="${n.y-2}">${n.label}</text>
+        <text class="switchSub" x="${n.x}" y="${n.y+14}">${n.sub}</text>
+      </g>`;
+    } else {
+      nodeHtml += `<g data-node="${id}">
+        <circle class="nodeCircle" cx="${n.x}" cy="${n.y}" r="24" fill="var(--panel)" stroke="var(--idle)"></circle>
+        <text class="nodeLabel" x="${n.x}" y="${n.y+5}">${n.label}</text>
+        <text class="nodeSub" x="${n.x}" y="${n.y+40}">flavor ${n.flavor}</text>
+      </g>`;
+    }
+  });
+  svg.innerHTML = defs + `<g id="edgeLayer">${edgeHtml}</g><g id="nodeLayer">${nodeHtml}</g>`;
+}
+buildStaticSvg();
+
+function setNodeState(id, mode){
+  const g = svg.querySelector(`g[data-node="${id}"]`);
+  if(!g) return;
+  const shape = g.querySelector('circle, rect');
+  shape.classList.remove('pulse');
+  let stroke = 'var(--idle)', fill = 'var(--panel)', dash = null, width = 2.5;
+  if(NODES[id].isSwitch) fill = 'var(--switchfill)';
+  switch(mode){
+    case 'goal': stroke='var(--goal)'; dash='5 4'; width=3; break;
+    case 'frontier': stroke='var(--frontier)'; width=3; break;
+    case 'current': stroke='var(--current)'; width=3.5; shape.classList.add('pulse'); break;
+    case 'bound': stroke='var(--bound)'; fill='color-mix(in srgb, var(--bound) 16%, var(--panel))'; width=3; break;
+    case 'failed': stroke='var(--failed)'; fill='color-mix(in srgb, var(--failed) 14%, var(--panel))'; width=3; break;
+    case 'undone': stroke='var(--failed)'; dash='2 3'; width=2; break;
+    default: break;
+  }
+  shape.setAttribute('stroke', stroke);
+  shape.setAttribute('fill', fill);
+  shape.setAttribute('stroke-width', width);
+  if(dash) shape.setAttribute('stroke-dasharray', dash); else shape.removeAttribute('stroke-dasharray');
+}
+
+function renderDiagram(step){
+  Object.keys(NODES).forEach(id=>setNodeState(id,'idle'));
+  const snap = step.snapshot;
+  (snap.failedForever||[]).forEach(id=>setNodeState(id,'failed'));
+  (snap.undone||[]).forEach(id=>setNodeState(id,'undone'));
+  if(step.extra && step.extra.G){
+    step.extra.G.forEach(id=>{ if(!snap.failedForever.includes(id)) setNodeState(id,'goal'); });
+  }
+  if(step.extra && step.extra.table){
+    step.extra.table.forEach(r=>{ if(r.node!==step.extra.popped && !snap.failedForever.includes(r.node)) setNodeState(r.node,'frontier'); });
+  }
+  snap.boundPath.forEach(id=>{ if(id!=='S0') setNodeState(id,'bound'); });
+  if(step.extra && step.extra.popped) setNodeState(step.extra.popped,'current');
+
+  document.querySelectorAll('.edgePath').forEach(p=>p.classList.remove('bound'));
+  document.querySelectorAll('.edgePath').forEach(p=>p.setAttribute('marker-end','url(#arrow)'));
+  for(let k=0;k<snap.boundPath.length-1;k++){
+    const f=snap.boundPath[k], t=snap.boundPath[k+1];
+    const p = svg.querySelector(`path[data-edge="${f}|${t}"]`);
+    if(p){ p.classList.add('bound'); p.setAttribute('marker-end','url(#arrowBound)'); }
+  }
+}
+
+function renderLegProgress(step){
+  const snap = step.snapshot;
+  const wrap = document.getElementById('legProgress');
+  wrap.innerHTML = LEGS.map(f=>{
+    const bound = snap.bindings[f];
+    const cp = snap.checkpointed[f];
+    const cur = (step.extra && step.extra.flavor===f);
+    return `<span class="legchip ${cur?'active':''}">${cp?'<span class="lock">🔒</span>':''} ${f} ${bound?`<span class="stn">(${bound})</span>`:''}</span>`;
+  }).join('');
+}
+
+function renderAssembler(step){
+  const snap = step.snapshot;
+  const kv = document.getElementById('assemblerKv');
+  const currentFlavor = (step.extra && step.extra.flavor) || snap.legFlavor || '—';
+  kv.innerHTML = `
+    <dt>Current leg</dt><dd>${currentFlavor}</dd>
+    <dt>Coupler calls so far</dt><dd>${snap.callNumber}</dd>
+    <dt>Checkpointed types</dt><dd>${Object.keys(snap.checkpointed).filter(f=>snap.checkpointed[f]).join(', ') || '(none yet)'}</dd>
+    <dt>Undone (backtracked)</dt><dd>${snap.undone.join(', ') || '(none)'}</dd>
+  `;
+  const altsBox = document.getElementById('altsBox');
+  const rows = LEGS.filter(f=>snap.altsByFlavor[f] && snap.altsByFlavor[f].length && !snap.checkpointed[f]);
+  if(!rows.length){
+    altsBox.innerHTML = `<div class="kv"><dt>Alts (C2c)</dt><dd>none retained right now</dd></div>`;
+  } else {
+    altsBox.innerHTML = `<div style="font-size:11px;color:var(--sub);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">Alts retained (C2c) — usable only while not checkpointed</div>
+    <ul class="altList">${rows.map(f=>`<li><span>${f}</span><b>{ ${snap.altsByFlavor[f].join(', ')} }</b></li>`).join('')}</ul>`;
+  }
+}
+
+function renderCoupler(step){
+  const kv = document.getElementById('couplerKv');
+  const ex = step.extra || {};
+  kv.innerHTML = `
+    <dt>Tail</dt><dd>${ex.tail || '—'}</dd>
+    <dt>Leg</dt><dd>${ex.flavor || '—'}</dd>
+    <dt>Goal set G</dt><dd>${ex.G ? '{ '+ex.G.join(', ')+' }' : '—'}</dd>
+  `;
+  const tbody = document.getElementById('frontierTbody');
+  if(ex.table && ex.table.length){
+    tbody.innerHTML = ex.table.map(r=>`
+      <tr class="${r.chosen?'chosenRow':''}">
+        <td class="mono">${r.node}</td><td>${r.g}</td><td>${r.preferInUse}</td>
+        <td>${r.preferNonTransparent}</td><td>${r.distSeg}</td><td>${r.distTerm}</td>
+        <td>${r.rank}</td><td class="mono">${r.name}</td>
+      </tr>`).join('');
+  } else {
+    tbody.innerHTML = `<tr><td colspan="8" style="color:var(--sub);">No active frontier at this step (leg boundary / Assembler-level event).</td></tr>`;
+  }
+}
+
+function renderContext(step){
+  const snap = step.snapshot;
+  document.getElementById('contextBlock').textContent = JSON.stringify(snap.context, null, 2);
+  const kv = document.getElementById('bindingsKv');
+  kv.innerHTML = LEGS.map(f=>`<dt>${f}</dt><dd>${snap.bindings[f] || '—'}</dd>`).join('');
+}
+
+function renderLog(idx){
+  const list = document.getElementById('logList');
+  document.getElementById('logCountTag').textContent = `${STEPS.length} steps`;
+  list.innerHTML = STEPS.map((s,i)=>`
+    <button class="logItem ${i===idx?'here':''}" data-idx="${i}">
+      <span class="n">${i+1}</span>
+      <span class="kdot" style="background:${KIND_COLOR[s.kind]||'#999'}"></span>
+      <span>${s.title}</span>
+    </button>`).join('');
+  list.querySelectorAll('.logItem').forEach(btn=>{
+    btn.addEventListener('click', ()=>goTo(parseInt(btn.dataset.idx,10)));
+  });
+  const here = list.querySelector('.logItem.here');
+  if(here) here.scrollIntoView({block:'nearest'});
+}
+
+let currentIndex = 0;
+let playTimer = null;
+
+function render(){
+  const step = STEPS[currentIndex];
+  document.getElementById('stepTitle').textContent = step.title;
+  document.getElementById('stepDetail').textContent = step.detail;
+  const badge = document.getElementById('stepKindBadge');
+  badge.textContent = step.kind.replace(/_/g,' ').replace(/-/g,' ');
+  badge.style.background = KIND_COLOR[step.kind] || '#888';
+  document.getElementById('stepCounter').textContent = `${currentIndex+1} / ${STEPS.length}`;
+  document.getElementById('scrubber').value = currentIndex;
+  document.getElementById('btnPrev').disabled = currentIndex===0;
+  document.getElementById('btnFirst').disabled = currentIndex===0;
+  document.getElementById('btnNext').disabled = currentIndex===STEPS.length-1;
+  document.getElementById('btnLast').disabled = currentIndex===STEPS.length-1;
+
+  renderDiagram(step);
+  renderLegProgress(step);
+  renderAssembler(step);
+  renderCoupler(step);
+  renderContext(step);
+  renderLog(currentIndex);
+}
+function goTo(i){ currentIndex = Math.max(0, Math.min(STEPS.length-1, i)); render(); }
+function next(){ if(currentIndex<STEPS.length-1){ currentIndex++; render(); } else stopPlay(); }
+function prev(){ goTo(currentIndex-1); }
+function stopPlay(){ if(playTimer){ clearInterval(playTimer); playTimer=null; document.getElementById('btnPlay').textContent='▶ Play'; } }
+function togglePlay(){
+  if(playTimer){ stopPlay(); return; }
+  document.getElementById('btnPlay').textContent = '⏸ Pause';
+  playTimer = setInterval(()=>{
+    if(currentIndex>=STEPS.length-1){ stopPlay(); return; }
+    next();
+  }, 1400);
+}
+
+document.getElementById('btnFirst').addEventListener('click', ()=>goTo(0));
+document.getElementById('btnPrev').addEventListener('click', prev);
+document.getElementById('btnNext').addEventListener('click', next);
+document.getElementById('btnLast').addEventListener('click', ()=>goTo(STEPS.length-1));
+document.getElementById('btnPlay').addEventListener('click', togglePlay);
+document.getElementById('scrubber').addEventListener('input', e=>goTo(parseInt(e.target.value,10)));
+document.addEventListener('keydown', e=>{
+  if(e.key==='ArrowRight'){ stopPlay(); next(); }
+  if(e.key==='ArrowLeft'){ stopPlay(); prev(); }
+});
+
+document.getElementById('scrubber').max = STEPS.length-1;
+render();
+</script>
+</body>
+</html>

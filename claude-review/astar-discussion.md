@@ -207,4 +207,66 @@ This is a bigger departure from classic A* than it might look, but it's actually
 - This also sidesteps the messiest part of weighted A* — reopening/re-relaxing nodes when a cheaper g is found later. With unit-cost BFS-shaped search, the first time you pop a node at some g, that g is already optimal, so the closed-set logic is much simpler than in general A*. The "careful closed-set" warning in your docs is about a narrower issue (inspect-fail at a goal shouldn't blacklist the *station*, only that *arrival*), not about cost-reopening.
 
 So: g-dominant + lexicographic tie-break isn't a weaker version of A*, it's the correct simplification once you notice the graph is unweighted — and using ExpandKey to inject determinism/stickiness/first-fit preferences into the tie-break slot (rather than trying to fold "prefer non-transparent" into a cost term) is a clean way to keep search behavior deterministic without corrupting the shortest-path guarantee that g alone already gives you. The one thing I'd double check against your own stated goals: BUILD_SPEC says "sub-optimal OK (first-fit)" — worth confirming that's about *goal choice among G* (first inspect-OK sink wins, not necessarily the "best" sink) rather than about path length to a given sink, since path length to a given sink actually *is* optimal under this scheme (g-dominant pop). Those are two different notions of "optimal" and it's easy to conflate them when reading "sub-optimal OK."
+
+## User
+
+this whole discussion, can you create a md file with every word in it exactly so i can email myself
+
+## Assistant
+
+*(Wrote and delivered this file as `astar-discussion.md`.)*
+
+## User
+
+ok so it sounds ok to have my assembler organizing the next leg for the coupler to run agianst
+
+## Assistant
+
+Yes — that's exactly the right split, and it's what both your machine-network example and Trackplan converged on independently:
+
+- **Assembler owns the "which flavor/leg is next"** decision — building the goal set for that leg (multi-sink candidates of the required next type/flavor), applying any reachability filtering (Oracle++-style, so you don't hand the Coupler a dead-end candidate), and tracking overall progress through the A→B→C-style chain.
+- **Coupler owns the actual pathfinding for that one leg** — from the current tail, searching the fabric (including any pass-through/switch nodes) to find a path to *any* node in the goal set the Assembler handed it, without needing to know or care about the legs before or after.
+
+This keeps the stage/waypoint logic in exactly one place (Assembler) instead of leaking it into the pathfinder's internal state, and lets Coupler stay a clean, reusable "path from tail to goal-set" search — same as the plain node-to-node approach you're already running for the A/B/switch/C case, just organized so each leg's goal set is prepared before the search runs rather than discovered by the search itself.
+
+One thing worth being disciplined about as you build this out: keep the boundary strict — Assembler decides *what* the goals are and *when* to move to the next leg or backtrack; Coupler decides *how* to get there. If path-retry or inspect-failure logic starts leaking into the Assembler (e.g., Assembler re-calling Coupler once per candidate station instead of handing it the whole goal set at once), you end up re-walking shared prefix from the same tail repeatedly — the exact inefficiency Option B (peel) had and Option A was chosen to avoid.
+
+## User
+
+question on frontier nodes tho, would coupler return those to the assembler so it can maintain a open frontier log
+
+## Assistant
+
+No — and your own docs are explicit about this: the frontier stays entirely internal to Coupler for the duration of one `couple()` call. Nothing raw crosses back to Assembler mid-search.
+
+What actually crosses the Assembler/Coupler boundary is narrower and happens only **after** the call finishes:
+
+1. **The result** — success (a binding + path) or failure.
+2. **A capped `FailureReport`** — BUILD_SPEC §9.3/§3.10 explicitly limits this to "capped `inspector_samples` / failed goal arrivals (stationId, code, short path summary)" and says plainly: **"not the full frontier."** SPEC.md is even more direct: "Fail at the first pipeline stage that emptied options; do not dump the Coupler ExpandKey frontier to users."
+3. **Unused goals as `alts`** — but these are Assembler-level candidates (StationType goal set members from the agenda, C2c), not raw graph/fabric nodes from inside Coupler's search. "Alts" means "which of my leg's candidate stations didn't get tried yet," not "which fabric nodes were still open in the priority queue."
+
+So there's a real distinction worth keeping straight: your original A* question was about logging every discovered node (the open set/frontier itself). In Trackplan's split, that frontier is Coupler's private working state for one segment — it gets created, searched, and discarded within a single call. What Assembler sees instead is a *summary*: did it succeed, and if not, a small sample of why (for operator debugging), plus which of its own leg-level goal candidates are still available for backtrack.
+
+Why the design draws the line here rather than exposing the frontier: if Assembler had to track/maintain an open frontier log across calls, you'd reintroduce exactly the coupling Option A was chosen to avoid — Assembler making path-level decisions, or round-tripping per fabric node instead of per leg. It also breaks statelessness between segments: Coupler's frontier (with its accumulated path Context) is only meaningful mid-search: once the call returns, that state has no further use, so there's nothing worth handing back except the outcome and a bounded explain sample.
+
+If you want operator-facing visibility into *why* a search failed (multiple switch tries, several rejected stations), that's the `FailureReport`'s job — a deliberately bounded, structured report, not a frontier dump.
+
+## User
+
+so if i have an example where i have a Switch -> B1 and Switch -> B2, b1 and b2 are goals for the coupler, if b1 succeeds, b2 is an unused goal that the assembler maintains. so if im on the next coupler run and B1 -> C1 and c1 fails, the assembler can feed the coupler a goal of b2 to try that path?
+
+## Assistant
+
+Yes, that's exactly the mechanism — and it lines up precisely with the checkpoint timing rule in BUILD_SPEC §3.9d, which is worth being precise about since it determines *when* B2 stops being retryable.
+
+**Walking through your example with the actual rule**
+
+1. Coupler runs the B-leg: tail = Switch, goals = {B1, B2}. First-fit finds B1 inspect-OK first → returns success. B2 is the unused goal → Assembler stashes it as an **alt** for StationType B (C2c).
+2. **Critically: B is not checkpointed yet.** Per BUILD_SPEC: *"checkpoint type only after the next non-transparent leg has a successful working Task."* B1 succeeding doesn't checkpoint B — only C succeeding afterward would checkpoint B. So right now B is still "open" on the backtrack stack, with B2 sitting as its retained alt.
+3. Coupler runs the C-leg: tail = B1's out, goals = {C1, ...}. C1 fails (and let's say the whole goal set for C fails, or fails in a way that requires backtrack).
+4. Assembler backtracks. Per C2b, the floor is the **last Checkpoint** — which at this point is whatever got checkpointed when B1 succeeded (i.e., A, since B1 succeeding is what checkpoints the leg *before* it, A). B itself is not checkpointed, so it's fair game: Assembler restores the working overlay to the state at that checkpoint boundary (undoing the B1 bind and anything built on top of it), and resumes with the **remaining alts for the first non-checkpointed leg on the stack** — which is B, with alt = B2.
+5. Assembler issues a **new** `couple()` call: tail = Switch (A's out-track, same as step 1), goals = {B2} (whatever alts remain for that leg). This is a fresh Coupler call — the earlier frontier isn't reused or resumed, since Coupler's frontier is ephemeral per-call. Coupler re-searches from that tail toward B2.
+6. If B2 succeeds, Assembler proceeds to retry the C-leg from B2's tail with a fresh goal set for C.
+
+So your description is correct, with one nuance worth internalizing: it's not "B1→C1 fails, so immediately try B2" as a local retry — it's "C's failure triggers backtrack to the last *Checkpoint*, which happens to land on B (because B was never checkpointed, since its own success didn't checkpoint itself — only the leg before it did), and B's alts are still sitting there waiting." If C1's leg had instead *succeeded* and it was some *later* leg D that failed, B would already be checkpointed by then (once C succeeded) and B2 would no longer be usable — backtrack would only be able to unwind as far as C's checkpoint, not back to B.
 </content>

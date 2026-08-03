@@ -14,13 +14,13 @@
 
 Real Trackplan worlds have:
 
-- Many **StationTypes** (each with schemas, Prefilter / Inspector, heuristics, `transparent?`)
+- Many **StationTypes** (code catalog / JAR: schemas, canUse/inspect SPI, heuristics, `transparent?`)
 - Many **Stations**, **Tracks**, **Links**, legal in→out pairs (on type)
 - **World state:** setup, **tasking** (Task[] — assignment source of truth), liveData; Station OPEN/CLOSED; Link.online
 - **Bookings** as ordered non-transparent StationType legs with request fields, priority, timeWindow
 - Optional multi-step stories (sticky re-resolve, hopeful release, planSegments)
 
-Hand-authoring JSON fixtures for that is slow and error-prone. Walkthrough HTML teaches *behavior*, but is not a golden factory. Goldens drift from the “true” toy story when topology is only described in prose.
+Hand-authoring JSON fixtures for that is slow and error-prone. Walkthrough HTML teaches *behavior*, but is not a golden factory. Goldens drift from the “true” walkthrough story when topology is only described in prose.
 
 **Need:** a small web UI to **build topology + world state + bookings**, then **export deterministic fixtures** the engine tests can load.
 
@@ -65,11 +65,11 @@ A **test asset factory**: construct `world` + `booking` (+ optional `expect`) us
 
 ### 4.1 Topology / catalog
 
-1. Add **StationTypes** (or pick from a registry of toy types: Refrigerated, Normal, Docking, Switch/transparent, …).  
+1. Add **StationTypes** (or pick from a registry of example StationTypes: Refrigerated, Normal, Docking, Switch/transparent, …).  
 2. Place **Stations** (instance of a StationType; setup blob; tracks come from type).  
 3. Drag **out-track → in-track** to create a **Link** (`from` OUT → `to` IN).  
 4. Toggle **Station online** (OPEN/CLOSED) and **Link.online**.  
-5. **Multi-link allowed** (e.g. many upstream outs into one terminal in-track). Inspector rules decide concurrent legality — not a global “one link per out” hard law. Studio may **optionally warn** in toy mode if an out has multiple Links (see §8).
+5. **Multi-link allowed** (e.g. many upstream outs into one terminal in-track). Inspector rules decide concurrent legality — not a global “one link per out” hard law. Studio may **optionally warn** in authoring warn mode if an out has multiple Links (see §8).
 
 No separate Yard entity. Switches and similar junctions are **transparent StationTypes** with IN/OUT tracks and legal pairs.
 
@@ -122,7 +122,7 @@ Phase A may ship without expect (export world+booking only). Phase B+ should mak
 
 | Artifact | Contents |
 |----------|----------|
-| `world.json` | stationTypes, stations (setup, tasking, liveData, online), links, policy overrides |
+| `world.json` | stationTypes, stations (setup, tasking, liveData, online, inputs/outputs Links), optional flat links, policy |
 | `booking.json` | legs + ids + priority + submitTime + timeWindow |
 | `script.json` | Optional multi-step resolve/release |
 | `expect.json` | Optional assertions (route, bindings, planSegments, sticky flags) |
@@ -198,24 +198,35 @@ Hand-written Kotlin stays thin: **one generic test** (or a few) that parameteriz
 data class WorldFixture(
   val trackplan_fixture_version: Int = 1,
   val stationTypes: List<StationTypeDto>,
-  val stations: List<StationDto>,
-  val links: List<LinkDto>,
+  val stations: List<StationDto>,   // each Station carries inputs/outputs Links (BUILD_SPEC §3.3)
+  // Optional flat link list for export convenience; if present must match station adjacency.
+  // DEFAULT: omit — topology lives only on Station.inputs / Station.outputs.
+  val links: List<LinkDto>? = null,
   val policy: PolicyDto? = null,
 )
 
 @Serializable
+data class TrackDefDto(
+  val id: String,                   // uuid — join key; owned by StationType
+  val name: String,                 // track kind discriminator, e.g. "type1"
+  val number: Int,                  // index on that side, e.g. 1..32
+)
+
+@Serializable
 data class StationTypeDto(
+  // Production: load via StationTypeRef { id, className } → Class.forName (BUILD_SPEC §3.2).
+  // Fixtures may either (a) list className and use the same boot loader, or (b) embed
+  // metadata only and bind to in-test SPI fakes by id. Never inspectorId/prefilterId.
   val id: String,
+  val className: String? = null,   // FQCN when using real SPI load; null ⇒ test fake by id
   val name: String,
   val transparent: Boolean = false,
   val setupSchema: JsonElement? = null,
   val taskingSchema: JsonElement? = null,
   val requestSchema: JsonElement? = null,
-  val inputTracks: List<String>,
-  val outputTracks: List<String>,
-  val legalPairs: List<LegalPairDto>,
-  val inspectorId: String,
-  val prefilterId: String? = null,
+  val inputTracks: List<TrackDefDto>,
+  val outputTracks: List<TrackDefDto>,
+  val legalPairs: List<LegalPairDto>,  // in/out = TrackDef.id
   val heuristics: HeuristicsDto = HeuristicsDto(),
 )
 
@@ -227,13 +238,15 @@ data class StationDto(
   val setup: JsonObject = JsonObject(emptyMap()),
   val tasking: List<TaskDto> = emptyList(),
   val liveData: JsonObject = JsonObject(emptyMap()),
+  val inputs: List<LinkDto> = emptyList(),   // Links to this station’s IN TrackDefs
+  val outputs: List<LinkDto> = emptyList(),  // Links from this station’s OUT TrackDefs
 )
 
 @Serializable
 data class LinkDto(
   val id: String,
-  val from: TrackEndpointDto,       // OUT: stationId + trackId
-  val to: TrackEndpointDto,         // IN:  stationId + trackId
+  val from: TrackEndpointDto,       // OUT: stationId + TrackDef.id
+  val to: TrackEndpointDto,         // IN:  stationId + TrackDef.id
   val online: Boolean = true,
 )
 
@@ -374,27 +387,35 @@ Studio is not in CI — only its exports are.
       "id": "sttype_refrigerated",
       "name": "Refrigerated",
       "transparent": false,
-      "inputTracks": ["1"],
-      "outputTracks": ["1"],
-      "legalPairs": [{ "in": "1", "out": "1" }],
-      "inspectorId": "refrigerated",
-      "prefilterId": "refrigerated",
+      "inputTracks": [
+        { "id": "td_r_in_1", "name": "type1", "number": 1 }
+      ],
+      "outputTracks": [
+        { "id": "td_r_out_1", "name": "type1", "number": 1 }
+      ],
+      "legalPairs": [{ "in": "td_r_in_1", "out": "td_r_out_1" }],
       "heuristics": { "checkpoint": true, "fillFirst": true }
     },
     {
       "id": "sttype_switch",
       "name": "Switch",
       "transparent": true,
-      "inputTracks": ["1", "5"],
-      "outputTracks": ["1", "2", "3", "6"],
-      "legalPairs": [
-        { "in": "1", "out": "1" },
-        { "in": "1", "out": "2" },
-        { "in": "1", "out": "3" },
-        { "in": "5", "out": "6" }
+      "inputTracks": [
+        { "id": "td_sw_in_1", "name": "type1", "number": 1 },
+        { "id": "td_sw_in_5", "name": "type2", "number": 5 }
       ],
-      "inspectorId": "switch",
-      "prefilterId": null,
+      "outputTracks": [
+        { "id": "td_sw_out_1", "name": "type1", "number": 1 },
+        { "id": "td_sw_out_2", "name": "type1", "number": 2 },
+        { "id": "td_sw_out_3", "name": "type1", "number": 3 },
+        { "id": "td_sw_out_6", "name": "type2", "number": 6 }
+      ],
+      "legalPairs": [
+        { "in": "td_sw_in_1", "out": "td_sw_out_1" },
+        { "in": "td_sw_in_1", "out": "td_sw_out_2" },
+        { "in": "td_sw_in_1", "out": "td_sw_out_3" },
+        { "in": "td_sw_in_5", "out": "td_sw_out_6" }
+      ],
       "heuristics": { "checkpoint": false, "fillFirst": true }
     }
   ],
@@ -405,7 +426,9 @@ Studio is not in CI — only its exports are.
       "online": true,
       "setup": { "band": "4N", "maxCabinets": 4 },
       "tasking": [],
-      "liveData": {}
+      "liveData": {},
+      "inputs": [],
+      "outputs": []
     },
     {
       "id": "Y1",
@@ -413,15 +436,16 @@ Studio is not in CI — only its exports are.
       "online": true,
       "setup": {},
       "tasking": [],
-      "liveData": {}
-    }
-  ],
-  "links": [
-    {
-      "id": "link_y1_n04",
-      "from": { "stationId": "Y1", "trackId": "1" },
-      "to": { "stationId": "N-04", "trackId": "1" },
-      "online": true
+      "liveData": {},
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "link_y1_n04",
+          "from": { "stationId": "Y1", "trackId": "td_sw_out_1" },
+          "to": { "stationId": "N-04", "trackId": "td_n_in_1" },
+          "online": true
+        }
+      ]
     }
   ]
 }
@@ -469,13 +493,13 @@ Studio is not in CI — only its exports are.
 
 | Phase | Deliverable | Engine required? | Exit criteria |
 |-------|-------------|------------------|---------------|
-| **A — Author & export** | Topology + world state (setup/tasking/liveData) + booking editors; download JSON | No | Round-trip load; export matches BUILD_SPEC shapes; can recreate current toy world |
+| **A — Author & export** | Topology + world state (setup/tasking/liveData) + booking editors; download JSON | No | Round-trip load; export matches BUILD_SPEC shapes; can recreate current shared topology |
 | **B — Expect + library** | expect.json UI; seed G1–G12 as loadable fixtures | No (manual expect) | Each golden has a fixture folder under e.g. `fixtures/` |
 | **C — Highlight declared path** | Paint expect route hops on fabric (static) | No | Review loopback / multi-switch paths without running code |
 | **D — Live resolve** | “Run” calls local Trackplan API or in-process/WASM | Yes | Diff actual vs expect; red/green |
 | **E — Generators** | Constrained random worlds / bookings | Optional | Fuzz corpus from same schema |
 
-**Recommendation:** implement **A** as soon as entity types stabilize enough for toy StationTypes; do **not** block A on Coupler completeness. **D** after P0–P2 engine slices.
+**Recommendation:** implement **A** as soon as entity types stabilize enough for walkthrough StationTypes; do **not** block A on Coupler completeness. **D** after P0–P2 engine slices.
 
 Kotlin golden runner (load JSON → resolve → assert) can ship with the engine **before** Studio exists: hand-write a few fixture folders, then let Studio author the rest.
 
@@ -486,7 +510,7 @@ Kotlin golden runner (load JSON → resolve → assert) can ship with the engine
 1. **Rail vocabulary only** — StationType, Station, Track, Link, Hop, Booking, Leg, Route, Binding, Task, Tasking, Request, Prefilter, Inspector, Assembler, Coupler, Oracle, agenda, transparent, liveData.  
 2. **Track-first** — show IN/OUT tracks; hops are `in:stationId:out`; Links are out→in.  
 3. **Drag-to-link** — create Links by dragging from an **out** track on a Station to an **in** track on another; reposition Stations by dragging nodes.  
-4. **Multi-link allowed** — BUILD_SPEC: many Links may share the same out or in; concurrent legality is **Inspector**-driven. Studio **DEFAULT toy mode:** optional **warn** (not hard-block) when an out already has a Link; advanced mode silent. Do **not** treat “one Link per out” as mandatory engine policy.  
+4. **Multi-link allowed** — BUILD_SPEC: many Links may share the same out or in; concurrent legality is **Inspector**-driven. Studio **DEFAULT authoring warn mode:** optional **warn** (not hard-block) when an out already has a Link; advanced mode silent. Do **not** treat “one Link per out” as mandatory engine policy.  
 5. **Separate geometry from usability** — “delete Link” ≠ “set Link.online = false”; “delete Station” ≠ “Station CLOSED”.  
 6. **Tasking over free-form claims** — seed capacity goldens with Task[] on stations.  
 7. **Scenarios are fixtures**, not slides — multi-step script object, not PowerPoint.  
@@ -540,7 +564,7 @@ Studio must feel like a real editor: **drag nodes**, **click to select**, **conn
 | **Drag to link** Station ↔ Station | Primary way to create **Links**: pointer down on an **out** track/handle → drag → drop on an **in** track/handle → new Link |
 | Click Station | Selection → right panel (setup, tasking, liveData, online, type) |
 | Click track | Highlight legal mates; optional “connect mode” if not dragging |
-| Connect Link (rules) | Edge only **out → in**; multi-link allowed (inspector validates at resolve); optional toy warn if out already linked |
+| Connect Link (rules) | Edge only **out → in**; multi-link allowed (inspector validates at resolve); optional authoring warn if out already linked |
 | Delete / offline edge | Delete = remove Link; “offline” = `Link.online = false` (not geometry) |
 | OPEN/CLOSED Station | Toggle `Station.online` |
 | Palette → canvas | Drag “add Station” (pick StationType) onto canvas |
@@ -600,7 +624,7 @@ Studio does not implement Coupler, but editors can document/export fixtures that
 - Time to add a new golden (world + booking + expect) **&lt; 30 minutes** for someone who knows the domain.  
 - Zero hand-edited hop lists for new tests once path is painted/accepted.  
 - Round-trip: export → reload → byte-identical canonical JSON (sorted).  
-- At least the **current toy topology** loadable as a starter template (stations + transparent switches + links).  
+- At least the **current reference topology** loadable as a starter template (stations + transparent switches + links).  
 - CI runs `fixtures/**` against the engine without Studio in the pipeline (export is pure data).
 
 ---
@@ -611,12 +635,12 @@ Studio does not implement Coupler, but editors can document/export fixtures that
 |---|----------|------------------------|
 | Q1 | Store layout (x,y) in fixture or separate file? | Separate `layout.json` so goldens ignore pixels |
 | Q2 | Multi-booking worlds in one fixture? | Yes for capacity / priority / planSegments tests; one “primary” booking under test (others seed tasking) |
-| Q3 | Inspector / Prefilter plugins in Studio? | Toy registry only (hard-coded StationType forms) until full catalog |
+| Q3 | canUse / inspect in Studio? | Walkthrough types from code catalog only (hard-coded StationType forms) until full JAR catalog |
 | Q4 | Browser resolve vs CLI only for Phase D? | CLI first (simpler CI); browser optional |
 | Q5 | Who can edit production-like StationType schemas? | Product; Studio only hosts forms driven by schema registry |
 | Q6 | Generate Kotlin source from Studio? | **No** — JSON + one parameterized test runner |
 | Q7 | Schema SSOT: Kotlin types vs JSON Schema? | Kotlin DTOs first; JSON Schema optional in CI |
-| Q8 | Toy-mode multi-link warning? | **Warn**, do not hard-block (BUILD_SPEC allows multi-link) |
+| Q8 | Authoring-mode multi-link warning? | **Warn**, do not hard-block (BUILD_SPEC allows multi-link) |
 | Q9 | How to author planSegments expects for multi-slice SAT? | Phase B: optional array; single route/bindings when one segment |
 | Q10 | Seeding tasking UI vs raw JSON? | Phase A: structured Task form (tracks, bookingIds, context); advanced raw JSON OK |
 
@@ -653,7 +677,7 @@ Engine goldens G1–G12 remain **required** for the domain. Studio accelerates *
 | Kotlin model | Shared `@Serializable` DTOs aligned with BUILD_SPEC |
 | Studio UI stack | **React + Vite + React Flow (`@xyflow/react`)** + form panels; MIT |
 | Linking devices | **Drag out-track → in-track** creates **Link** |
-| Multi-link | **Allowed** (inspector validates); Studio optional toy warn |
+| Multi-link | **Allowed** (inspector validates); Studio optional authoring warn |
 | Topology entities | StationTypes + Stations + Links — **no Yard / Cable / Port names** in export |
 | World truth | **setup + tasking + liveData**; tasking = assignment SSOT |
 | Booking demand | Non-transparent legs + request; priority + submitTime + timeWindow |
@@ -666,18 +690,19 @@ Engine goldens G1–G12 remain **required** for the domain. Studio accelerates *
 ## 15. Mental model cheat sheet (for Studio authors)
 
 ```text
-StationType  = catalog (schemas, inspector, prefilter?, transparent?, tracks, legalPairs)
-Station      = instance (setup, tasking: Task[], liveData, online)
-Track        = named IN or OUT on type; wired by Links in the world
-Link         = OUT track → IN track; online flag
+StationType  = code catalog (JAR): schemas, TrackDefs, canUse/inspect SPI, heuristics, transparent?, legalPairs
+StationTypeRef = { id, className } boot load handle → Class.forName → in-memory id→instance
+TrackDef     = owned by StationType: { id, name (kind e.g. type1), number } — up to ~32 in / ~32 out
+Station      = instance; connects via type’s TrackDefs (inputs/outputs Links); does not own tracks
+Link         = OUT TrackDef → IN TrackDef; same name required (type1→type1); lives on Station I/O
 Task         = one use of a station (in/out, context, taskingConfiguration, bookingIds)
 Tasking      = Task[] — what is / will be live (source of truth)
 Request      = user demand on a Booking leg
 Booking      = legs (non-transparent types only) + priority + submitTime + timeWindow
              → plan: bindings, route (full hops), planSegments[]
-Prefilter    = cheap canUse(setup, request, liveData) — no Task, no context
-Inspector    = inspect(setup, tasking+candidate, request, liveData) → full Task[] | fail
-Assembler    = outer: legs, prefilter candidates, agenda, checkpoints, sticky, commit
+canUse       = Prefilter SPI on type: cheap (setup, request, liveData) — no Task, no context
+inspect      = Inspector SPI on type: (setup, tasking+candidate, request, liveData) → full Task[] | fail
+Assembler    = outer: legs, canUse candidates, agenda, checkpoints, sticky, commit
 Coupler      = inner: multi-sink path; ExpandKey frontier; Oracle++ distToG / distToTerminal
 Oracle       = hop-count on online Links; rebuild on topology / OPEN-CLOSED, not tasking
 ```

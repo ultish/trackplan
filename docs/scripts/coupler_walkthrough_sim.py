@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Toy Coupler simulator for Trackplan walkthrough accuracy.
+Walkthrough Coupler simulator for Trackplan walkthrough accuracy.
 
 ExpandKey (lexicographic, DECIDED BUILD_SPEC §3.7b):
   0 preferInUse (higher) — neighbor has tasking
@@ -12,10 +12,10 @@ ExpandKey (lexicographic, DECIDED BUILD_SPEC §3.7b):
   6 portName / out track (lower)
 
 Usage:
-  python3 coupler_toy_sim.py simple
-  python3 coupler_toy_sim.py multiyard
-  python3 coupler_toy_sim.py loopback
-  python3 coupler_toy_sim.py all
+  python3 coupler_walkthrough_sim.py simple
+  python3 coupler_walkthrough_sim.py multiyard
+  python3 coupler_walkthrough_sim.py loopback
+  python3 coupler_walkthrough_sim.py all
 """
 
 from __future__ import annotations
@@ -328,7 +328,7 @@ def couple(
                 f"[{expansions}] NOT_GOAL {st.station} hops={list(st.hops)} "
                 f"ctx={sorted(st.context)} → not a multi-sink goal (e.g. prefilter seats)"
             )
-            # Still expand outs if any (toy map: N-08 has none)
+            # Still expand outs if any (reference map: N-08 has none)
             # fall through to expand
 
         # Transparent mid-path: if we arrived on a transparent station, inspect then expand

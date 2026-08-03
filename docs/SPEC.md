@@ -42,10 +42,10 @@ Use these terms in code, APIs, and docs. Asset scheduling under the covers; **St
 
 | Term | Meaning |
 |------|---------|
-| **StationType** | Catalog type (schemas, inspector, heuristics, `transparent`) — *not* JVM `Class` |
-| **Station** | Instance of a StationType (setup + tasking + tracks) |
+| **StationType** | Code catalog type (JAR/module: schemas, `canUse`/`inspect` SPI, heuristics, `transparent`) — *not* JVM `Class`; *not* DB plugin-id rows |
+| **Station** | Instance of a StationType (setup + tasking + inputs/outputs Links) |
 | **transparent** | StationType omitted from Booking demand; path filler (e.g. switch) |
-| **Track** | Named IN or OUT endpoint on a Station |
+| **TrackDef** | Owned by StationType: `{ id, name, number }` — `name` = track kind; Stations wire via Links |
 | **Link** | Topology: one station’s OUT track → another’s IN track |
 | **Setup** | Semi-static station properties (schema on type, values on station); not booking-driven |
 | **Tasking** | List of **Tasks** on a Station — live/planned-live source of truth |
@@ -185,12 +185,15 @@ inspect(setup, tasking, request, liveData):
 
 ### 5.1 Graph
 
-- **Nodes:** tracks / expand state `(stationId, side, trackId)` (or equivalent).  
+- **TrackDef (owned by StationType):** `{ id, name, number }` for each IN/OUT (e.g. up to 32+32). `name` = track kind **and** inter-station compatibility key. Not a wire.  
+- **Link (on Station):** Stations connect using the type’s TrackDefs — `outputs` / `inputs` = OUT TrackDef → peer IN TrackDef.  
+- **Link legality:** `name(from OUT) == name(to IN)` required (e.g. `type1` → `type1` only). Types without a shared track name cannot wire.  
+- **Nodes:** tracks / expand state `(stationId, side, trackDefId)` (or equivalent).  
 - **Edges:**  
-  - **Links:** out-track of A → in-track of B  
-  - **Internal:** legal `(in→out)` on same Station per type `legalPairs`  
-- **Hop key:** `(stationId, in_track, out_track)` — unique on a Booking route (anti-loop).  
-- **Re-entry allowed:** same transparent Station twice if hop_key differs (`1:Y1:1` then later `5:Y1:6`).
+  - **Links:** out TrackDef of A → in TrackDef of B (same name)  
+  - **Internal:** legal `(in→out)` on same Station per type `legalPairs` (by TrackDef.id)  
+- **Hop key:** `(stationId, inTrackDefId, outTrackDefId)` — unique on a Booking route (anti-loop).  
+- **Re-entry allowed:** same transparent Station twice if hop_key differs (different TrackDef pair).
 
 ### 5.2 Transparent StationType families (internal routing patterns)
 
@@ -284,7 +287,7 @@ Levers:
 
 ---
 
-## 9. Toy topology (docs + goldens)
+## 9. Reference topology (docs + goldens)
 
 ```text
 R ──► Y1 ──┬── N-04 ──► D
@@ -412,7 +415,7 @@ This expands the design-doc “What else to document” list into **actionable w
 | W5 | **Transparent StationType families** | Fabric rules | direct/agg/expand/restricted/full + **exclusive** capacity | **DECIDED exclusive** — combine/share out of scope |
 | W6 | **Fact / Context schema** | Inter-leg + path facts | Namespacing; **Inspector sole writer** (no `publish_on_hop`) | **Done BUILD_SPEC §4** — enumerate real stamps on transparent types |
 | W7 | **Concurrency & claims** | Multi-Booking safety | **Serial engine**; hard claim on SAT; same-run re-place | **Done BUILD_SPEC §11** |
-| W8 | **Golden tests G1–G12** | Prevent regressions | Toy topology + behaviors listed in BUILD_SPEC | **Specified** — implement with code |
+| W8 | **Golden tests G1–G12** | Prevent regressions | Reference topology + behaviors listed in BUILD_SPEC | **Specified** — implement with code |
 | W9 | **Observability** | Ops | sticky_hit, expansions p99, fail codes | **Specified BUILD_SPEC §12** |
 | W10 | **Non-goals / threats / phases** | Scope control | P0–P5, edge cases | **Done BUILD_SPEC §2,14,15** |
 | W11 | **Coupler explain log** | Debug multi-switch tries | Structured “goal reject” events (path summary, inspect code) | **Not written** — recommend for ops |
@@ -471,7 +474,7 @@ Each item: decision needed, options, recommendation, impact if wrong.
 ### Q8. Production StationType list and request schemas
 
 - **Options:** (product)  
-- **DEFAULT:** toy R/N/D + transparent switch types only for tests.  
+- **DEFAULT:** walkthrough R/N/D + transparent switch types only for tests.  
 - **Discuss:** must complete before production Inspectors.  
 - **Impact:** all of product.
 
@@ -638,7 +641,7 @@ resolve(booking, forcePriority=false):
 1. Confirm remaining **§12 OPEN** items that still block product (esp. **Q8** StationType catalog, **Q9** policy numbers after profile). **Resolved:** Q1 exclusive, Q2 C2b, Q3 first-fit ExpandKey, Q4 virtual S0, Q5 context state, Q6 Inspector-only, Q7 relevance sticky.  
 2. Draft **W14** production StationType table (even incomplete).  
 3. Implement **P0–P2** per BUILD_SPEC (Coupler ExpandKey frontier → Assembler+prefilter → path Context / C2d).  
-4. Port goldens G1–G12 on toy topology.  
+4. Port goldens G1–G12 on reference topology.  
 5. Only then Kafka adapters (**W17**): projection, reschedule policy, plan/claim/setup publishers.  
 6. Real topology import + policy numbers from profiling.
 

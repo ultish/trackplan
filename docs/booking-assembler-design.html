@@ -979,7 +979,7 @@
         (scenario ids stable). Primary contracts: <code>docs/BUILD_SPEC.md</code>.
       </div>
       <div class="callout warn">
-        <strong>Toy narrative:</strong> scenarios simplify full Task / time-slice /
+        <strong>Walkthrough narrative:</strong> scenarios simplify full Task / time-slice /
         whole-booking commit mechanics from BUILD_SPEC. They teach Assembler vs Coupler
         and Prefilter vs <code>Inspector.inspect</code>, not every engine edge case.
       </div>
@@ -1003,7 +1003,7 @@
           </tr>
           <tr>
             <td><strong>Station</strong></td>
-            <td>Instance of a StationType (id you bind): setup, tasking, liveData, tracks. Toy ids: R-17, N-04, Y1 (Y1 = Switch Station).</td>
+            <td>Instance of a StationType (id you bind): setup, tasking, liveData, tracks. Example ids: R-17, N-04, Y1 (Y1 = Switch Station).</td>
           </tr>
           <tr>
             <td><strong>transparent</strong></td>
@@ -1245,9 +1245,9 @@ flowchart TB
         <p class="scenario-blurb" id="scenarioBlurb"></p>
       </div>
 
-      <!-- Always-visible toy world graph with Links -->
-      <div class="topo-map" id="topoMap" aria-label="Toy topology graph">
-        <h3>Toy world — full topology (shared by all scenarios)</h3>
+      <!-- Always-visible shared topology graph with Links -->
+      <div class="topo-map" id="topoMap" aria-label="Shared topology graph">
+        <h3>Shared topology (all scenarios)</h3>
         <p class="topo-intro">
           This is the <strong>wired fabric</strong>, not just a list.
           Rectangles = <strong>Stations</strong>; lines = <strong>Links</strong>.
@@ -1256,7 +1256,7 @@ flowchart TB
           As you step a scenario, edges light up for the active path (cyan = current, green = already taken, red dashed = blocked/rejected).
         </p>
         <div class="topo-graph-wrap">
-          <div id="topoGraph" role="img" aria-label="Toy topology graph (Cytoscape.js)"></div>
+          <div id="topoGraph" role="img" aria-label="Shared topology graph (Cytoscape.js)"></div>
           <div class="topo-graph-hint">scroll to zoom · drag background to pan · click a node</div>
         </div>
         <div class="topo-legend-row">
@@ -1345,7 +1345,7 @@ flowchart TB
             </div>
             <p style="font-size:0.78rem;color:var(--muted);margin:0 0 0.5rem;max-width:none">
               Transparent switches show <strong>IN tracks</strong> (left) and <strong>OUT tracks</strong> (right).
-              One Link per out track in this toy (no multiplex).
+              One Link per out track in this reference map (no multiplex).
               <code>1:Y1:1</code>→N-04 · <code>1:Y1:2</code>→Y2 · <code>1:Y1:3</code>→N-08 ·
               <code>5:Y1:6</code>→N-12 (re-entry only; illegal 1→6).
               Y2 out5→N-04 · Y2 out6→Y1 in5 (loopback).
@@ -1991,7 +1991,7 @@ flowchart LR
           </tr>
           <tr>
             <td>Prefilter + Inspector</td>
-            <td><code>canUse</code> / <code>inspect</code> contracts + toy StationTypes</td>
+            <td><code>canUse</code> / <code>inspect</code> contracts + walkthrough StationTypes</td>
             <td>§3.7</td>
           </tr>
           <tr>
@@ -2011,7 +2011,7 @@ flowchart LR
           </tr>
           <tr>
             <td>Golden tests</td>
-            <td>G1–G12 expected behaviors + toy topology</td>
+            <td>G1–G12 expected behaviors + reference topology</td>
             <td>BUILD_SPEC goldens</td>
           </tr>
           <tr>
@@ -2028,7 +2028,7 @@ flowchart LR
         <li><strong>Data model</strong> — Confirm Track/Hop/Task shapes; any types beyond Refrigerated/Normal/Docking/Switch?</li>
         <li><strong>API</strong> — Library-only vs HTTP; Kafka adapters after domain (BUILD_SPEC §1).</li>
         <li><strong>Policy numbers</strong> — Are H=16, V=3, max_expansions=50k, wall=500ms acceptable?</li>
-        <li><strong>Inspector</strong> — Real request schemas (beyond toy Refrigerated/Normal/Docking)?</li>
+        <li><strong>Inspector</strong> — Real request schemas (beyond example Refrigerated/Normal/Docking)?</li>
         <li><strong>Transparent capacity</strong> — Accept exclusive-only v1, or need combine/share day one?</li>
         <li><strong>Context keys</strong> — Production stamp/cabinet names; which Inspectors write Task.context keys?</li>
         <li><strong>Commit</strong> — Whole-Booking only (DECIDED); working overlay path-local.</li>
@@ -2077,7 +2077,7 @@ flowchart LR
           </tr>
           <tr>
             <td>Which Inspectors write context keys</td>
-            <td>Per-type; empty default; toy Y2 Inspector sets <code>clearance.y2_stamp</code></td>
+            <td>Per-type; empty default; walkthrough Y2 Inspector sets <code>clearance.y2_stamp</code></td>
             <td>Enumerate production context keys / writers</td>
           </tr>
           <tr>
@@ -2089,7 +2089,7 @@ flowchart LR
       </table>
 
       <footer class="note">
-        Living design note for <strong>Trackplan</strong>. Walkthroughs are illustrative toy narratives.
+        Living design note for <strong>Trackplan</strong>. Walkthroughs are illustrative narratives.
         <strong>Build from:</strong> <code>docs/BUILD_SPEC.md</code> (primary) ·
         <code>docs/SPEC.md</code> (handoff) · Index: <code>docs/README.md</code>.
       </footer>
@@ -2098,7 +2098,7 @@ flowchart LR
 
   <script>
     /**
-     * Toy topology (shared):
+     * Shared topology (reference fabric):
      *   R-17 ──► Y1 ──► N-* ──► D-*
      *            │ └─► Y2 ──► N-*  (Y2 Inspector may write clearance.y2_stamp)
      *            └──────────────► (Y1↔Y2 loopback)
@@ -2417,7 +2417,7 @@ flowchart LR
           {
             phase: "coupler", leg: 1, meta: "NOT_GOAL N-08",
             title: "Try #2: 1:Y1:3 → N-08 · not a goal",
-            body: "Next frontier state by ExpandKey: hop <code>1:Y1:3</code> Link→ N-08:1 (cable <code>e_y1_n08</code>). Non-transparent ranks above Y2, so N-08 is tried before transparent. Arrive ≠ success: <strong>NOT_GOAL</strong> (4 seats · never multi-sink). No useful outs on toy map → dead branch; continue frontier.",
+            body: "Next frontier state by ExpandKey: hop <code>1:Y1:3</code> Link→ N-08:1 (cable <code>e_y1_n08</code>). Non-transparent ranks above Y2, so N-08 is tried before transparent. Arrive ≠ success: <strong>NOT_GOAL</strong> (4 seats · never multi-sink). No useful outs on reference map → dead branch; continue frontier.",
             consist: [
               { id: "R-17", cls: "a", locked: true },
               { id: "Y1", cls: "yard", hop: "1→3" },

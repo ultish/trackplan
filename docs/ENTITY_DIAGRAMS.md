@@ -13,7 +13,7 @@
 | Class / ResourceType | **StationType** |
 | Car / Asset | **Station** |
 | Yard | **transparent** StationType (no Yard entity) |
-| Port | **Track** (`TrackId` + side in/out) |
+| Port | **TrackDef** (owned by StationType: `id` + `name` kind + `number`; side via inputTracks vs outputTracks) |
 | Cable | **Link** (OUT track → IN track) |
 | config / claims | **Tasking** / **Task** |
 | Consist (old project name) | **Trackplan** |
@@ -25,7 +25,7 @@ Also: **Assembler** (outer: legs, sticky, commit) · **Coupler** (inner: multi-s
 
 ## 1. Catalog vs instance
 
-Catalog types define schemas, track shapes, and plugin ids. Instances hold values and live assignment truth.
+Catalog types (code / JAR) define schemas, track shapes, and SPI methods. Instances hold values and live assignment truth.
 
 ```mermaid
 classDiagram
@@ -38,23 +38,29 @@ classDiagram
     +Schema setupSchema
     +Schema taskingSchema
     +Schema requestSchema
-    +TrackId[] inputTracks
-    +TrackId[] outputTracks
+    +TrackDef[] inputTracks
+    +TrackDef[] outputTracks
     +LegalPair[] legalPairs
-    +string inspectorId
-    +string? prefilterId
     +Heuristics heuristics
+    +canUse setup request liveData
+    +inspect setup tasking request liveData
+    +neighborRank optional
+  }
+
+  class TrackDef {
+    +string id
+    +string name
+    +int number
   }
 
   class Heuristics {
     +bool checkpoint
     +bool fillFirst
-    +string? neighborRankId
   }
 
   class LegalPair {
-    +TrackId in
-    +TrackId out
+    +TrackDefId in
+    +TrackDefId out
   }
 
   class Station {
@@ -64,6 +70,8 @@ classDiagram
     +object setup
     +Task[] tasking
     +object liveData
+    +Link[] inputs
+    +Link[] outputs
   }
 
   class Schema {
@@ -72,35 +80,42 @@ classDiagram
 
   StationType "1" --> "*" Station : stationTypeId
   StationType *-- Heuristics : heuristics
+  StationType *-- TrackDef : inputTracks / outputTracks
   StationType *-- LegalPair : legalPairs
   StationType --> Schema : setupSchema
   StationType --> Schema : taskingSchema
   StationType --> Schema : requestSchema
-  StationType ..> Inspector : inspectorId registry
-  StationType ..> Prefilter : prefilterId optional
+  Station *-- Link : inputs / outputs
 
-  class Inspector {
-    <<plugin>>
-    inspect(...)
+  class StationTypeRef {
+    +string id
+    +string className
   }
 
-  class Prefilter {
-    <<plugin optional>>
-    canUse(...)
+  class Link {
+    +string id
+    +bool online
   }
 
-  note for StationType "transparent=true ⇒ omitted from Booking demand legs;\npath filler only (e.g. switch). No Yard entity."
-  note for Station "setup = setupSchema values (humans).\ntasking = Task[] assignment truth.\nliveData = metrics, not setup/request."
-  note for Heuristics "fillFirst default true (ExpandKey preferInUse).\nneighborRankId optional SmartNode (ExpandKey component 4).\nNo edgeCostId / summed preference ladder."
+  StationTypeRef ..> StationType : Class.forName(className) at boot
+
+  note for StationType "Code catalog (external JAR). TrackDefs = I/O slots.\ncanUse/inspect on type. transparent ⇒ omit from demand."
+  note for TrackDef "Owned by StationType: id, name (kind), number.\nStations only wire via these defs."
+  note for StationTypeRef "Thin load handle: domain id + FQCN."
+  note for Station "setup/tasking/liveData + inputs/outputs Links.\nDoes not own TrackDefs — type does."
+  note for Heuristics "fillFirst default true (ExpandKey preferInUse).\nNo neighborRankId / edgeCostId / summed ladder."
 ```
 
 ### How to read this
 
-- **StationType** is catalog; **Station** is a deployed instance of that type.
-- Schemas live on the type; **setup / tasking / liveData** values live on the station.
-- `inspectorId` is required (code registry). `prefilterId` may be **null** (optional cheap screen).
-- `transparent` stations are still real Stations on the fabric; they are only omitted from **demand** legs.
-- Type track lists + **legalPairs** are capability; concurrent legality is **Inspector**, not only `legalPairs`.
+- **StationType** is a **code** catalog entry (JAR / module implementing common SPI); **Station** is a deployed instance of that type.
+- **StationTypeRef** `{ id, className }` is the boot load handle: classpath is not enough — engine needs the FQCN to `Class.forName`.
+- **TrackDef** is **owned by StationType**: `{ id, name, number }` — `name` differentiates track *kinds* (e.g. `"type1"`).  
+- **Station** does not define tracks; it **connects** using the type’s TrackDefs via **Links** on `inputs` / `outputs`.  
+- Schemas + TrackDefs live on the type; **setup / tasking / liveData** + **Links** live on the station.  
+- Behavior is **methods on the type** (`canUse`, `inspect`, optional `neighborRank`).  
+- `transparent` stations are still real Stations on the fabric; only omitted from **demand** legs.  
+- **legalPairs** are capability by TrackDef.id; concurrent legality is **inspect()**.
 
 ---
 
@@ -116,12 +131,20 @@ classDiagram
     +string id
     +string stationTypeId
     +bool online
+    +Link[] inputs
+    +Link[] outputs
   }
 
   class StationType {
-    +TrackId[] inputTracks
-    +TrackId[] outputTracks
+    +TrackDef[] inputTracks
+    +TrackDef[] outputTracks
     +LegalPair[] legalPairs
+  }
+
+  class TrackDef {
+    +TrackDefId id
+    +string name
+    +int number
   }
 
   class Link {
@@ -133,49 +156,53 @@ classDiagram
 
   class From {
     +string stationId
-    +TrackId trackId
+    +TrackDefId trackId
     <<OUT side>>
   }
 
   class To {
     +string stationId
-    +TrackId trackId
+    +TrackDefId trackId
     <<IN side>>
   }
 
   class TrackRef {
     +string stationId
     +string side
-    +TrackId trackId
+    +TrackDefId trackId
   }
 
-  Station --> StationType : type defines tracks
+  Station --> StationType : type defines TrackDefs
+  Station *-- Link : inputs + outputs
+  StationType *-- TrackDef
   Link *-- From : from OUT
   Link *-- To : to IN
   From --> Station : stationId
   To --> Station : stationId
   TrackRef ..> Station : engine view of endpoint
 
-  note for Link "from = OUT track on Station A\nto = IN track on Station B\nonline=false ⇒ Coupler must not traverse"
-  note for Station "Engine traversal uses type tracks ∩ wired Links.\nMany outs may Link into one in (hub/terminal)."
+  note for TrackDef "Owned by StationType: id + name (kind) + number.\nNot a wire; Stations only reference these."
+  note for Link "from = OUT TrackDef on A\nto = IN TrackDef on B\nREQUIRED: from.name == to.name (e.g. type1→type1)\nlives on A.outputs and B.inputs"
+  note for Station "Unwired TrackDefs cannot be traversed.\nMany outs may Link into one in if names match."
 ```
 
 **Traversal sketch (not a class diagram):**
 
 ```mermaid
 flowchart LR
-  A_out["Station A<br/>OUT track"] -->|Link| B_in["Station B<br/>IN track"]
-  B_in --> B_visit["Visit B<br/>choose in→out pair"]
-  B_visit --> B_out["Station B<br/>OUT track"]
-  B_out -->|Link| C_in["Station C<br/>IN track"]
+  A_out["Station A<br/>OUT name=type1"] -->|Link same name| B_in["Station B<br/>IN name=type1"]
+  B_in --> B_visit["Visit B<br/>legalPairs in→out"]
+  B_visit --> B_out["Station B<br/>OUT name=type2"]
+  B_out -->|Link same name| C_in["Station C<br/>IN name=type2"]
 ```
 
 ### How to read this
 
 - A **Link** always runs **from OUT → to IN** (never the reverse as a single Link).
-- Track identity is a string **TrackId** scoped by station + side; type lists all possible tracks.
+- **StationType owns TrackDefs** (`id`, `name` = track kind, `number`); **Station** only wires them via **Links**.
+- **Compatibility:** only same **`TrackDef.name`** may connect (`type1` OUT → `type1` IN). Different names ⇒ no Link. That is how not all StationTypes can wire to each other.
 - `Link.online = false` or `Station.online = false` (CLOSED) removes that edge/node from Coupler search.
-- Topology (Links / online) feeds **Oracle++** (next type, non-transparent chain, terminal, hop `h`); tasking does **not** rebuild Oracle++.
+- Topology (Links / online) feeds **Oracle++**; tasking does **not** rebuild Oracle++.
 
 ---
 
@@ -338,50 +365,51 @@ flowchart LR
 
 ---
 
-## 5. Engine plugins (Prefilter, Inspector, NeighborRank / ExpandKey)
+## 5. StationType SPI (canUse, inspect, NeighborRank / ExpandKey)
 
-Plugins attach by id on **StationType**. Prefilter is optional; Inspector is required. Coupler ranking uses **ExpandKey** lexicographic order (BUILD_SPEC §3.7b); **NeighborRank** is ExpandKey component 4 (SmartNode).
+**StationType** is code (external JAR) implementing common interfaces. Prefilter (`canUse`) is optional (pass-all default); `inspect` is required. Coupler ranking uses **ExpandKey** lexicographic order (BUILD_SPEC §3.7b); **NeighborRank** is optional method = ExpandKey component 4.
 
 ```mermaid
 classDiagram
   direction TB
 
   class StationType {
-    +string inspectorId
-    +string? prefilterId
+    <<code catalog / JAR>>
+    +canUse setup request liveData
+    +inspect setup tasking request liveData
+    +neighborRank optional
     +Heuristics heuristics
   }
 
   class Heuristics {
     +bool checkpoint
     +bool fillFirst
-    +string? neighborRankId
   }
 
-  class Prefilter {
-    <<optional plugin>>
+  class PrefilterSPI {
+    <<interface optional>>
     +canUse setup request liveData
   }
 
-  class Inspector {
-    <<required plugin>>
+  class InspectorSPI {
+    <<interface required>>
     +inspect setup tasking request liveData
   }
 
-  class NeighborRank {
-    <<SmartNode optional>>
+  class NeighborRankSPI {
+    <<interface optional>>
     +neighborRank Long higher sooner
   }
 
-  StationType --> Prefilter : prefilterId
-  StationType --> Inspector : inspectorId
+  StationType ..|> PrefilterSPI
+  StationType ..|> InspectorSPI
+  StationType ..|> NeighborRankSPI
   StationType *-- Heuristics
-  Heuristics ..> NeighborRank : neighborRankId
 
-  note for Prefilter "NO Task, NO path context.\nCheap screen only.\nTransparent: no prefilter mid-path.\nrequest null ⇒ generally no request-based filter."
-  note for Inspector "One candidate Task appended per call.\nReturns FULL Task[] replacement.\nHard illegality lives here, not ExpandKey."
-  note for NeighborRank "ExpandKey component 4 (after in-use, non-trans, distToG, distToTerminal).\nHigher rank = try sooner. Default 0."
-  note for Heuristics "ExpandKey lex only — no edgeCostId / summed ladder.\nfillFirst → preferInUse; transparent via preferNonTransparent."
+  note for PrefilterSPI "NO Task, NO path context.\nCheap screen only.\nTransparent: no canUse mid-path.\nrequest null ⇒ generally no request-based filter."
+  note for InspectorSPI "One candidate Task appended per call.\nReturns FULL Task[] replacement.\nHard illegality lives here, not ExpandKey."
+  note for NeighborRankSPI "ExpandKey component 4 (after in-use, non-trans, distToG, distToTerminal).\nHigher rank = try sooner. Default 0 if unimplemented."
+  note for Heuristics "ExpandKey lex only — no edgeCostId / summed ladder.\nfillFirst → preferInUse; transparent via preferNonTransparent.\nNo plugin string ids."
 ```
 
 **Call shape (inputs only):**

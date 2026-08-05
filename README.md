@@ -20,6 +20,7 @@ Start: **[docs/README.md](./docs/README.md)**
 | [docs/booking-assembler-design.html](./docs/booking-assembler-design.html) | Interactive walkthroughs (vocabulary pass later) |
 | [docs/FIXTURE_STUDIO.md](./docs/FIXTURE_STUDIO.md) | Fixture Studio design (React Flow, JSON → Kotlin goldens) |
 | [docs/COUPLER_OPTION_A_VS_B.md](./docs/COUPLER_OPTION_A_VS_B.md) | Multi-sink ExpandKey frontier vs peel (v1 = A) |
+| [studio/env-studio/README.md](./studio/env-studio/README.md) | Env Studio (React Flow app): author Resource Types / Assets / Dataflow → JSON for LLM SPEC-coverage checks |
 
 ```bash
 open docs/BUILD_SPEC.md

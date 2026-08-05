@@ -13,6 +13,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useEnvStore } from "../state/store";
+import { useThemeStore } from "../state/theme";
 import { AssetNode, parsePortHandleId, type AssetNodeData } from "./AssetNode";
 
 const nodeTypes: NodeTypes = { asset: AssetNode };
@@ -25,6 +26,7 @@ export function Canvas() {
   const removeConnection = useEnvStore((s) => s.removeConnection);
   const selectAsset = useEnvStore((s) => s.selectAsset);
   const selectedAssetId = useEnvStore((s) => s.selectedAssetId);
+  const theme = useThemeStore((s) => s.theme);
 
   const [rejectMessage, setRejectMessage] = useState<string | null>(null);
 
@@ -115,25 +117,8 @@ export function Canvas() {
   const onPaneClick = useCallback(() => selectAsset(null), [selectAsset]);
 
   return (
-    <div style={{ flex: 1, position: "relative" }}>
-      {rejectMessage && (
-        <div
-          style={{
-            position: "absolute",
-            top: 10,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "#7f1d1d",
-            color: "white",
-            padding: "6px 12px",
-            borderRadius: 6,
-            fontSize: 12,
-            zIndex: 10,
-          }}
-        >
-          {rejectMessage}
-        </div>
-      )}
+    <div className="eh-canvasWrap">
+      {rejectMessage && <div className="eh-toast">{rejectMessage}</div>}
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -144,15 +129,19 @@ export function Canvas() {
         onEdgeClick={onEdgeClick}
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
-        // Handles are small (8px dots); this lets a drag that starts within 30px of one
+        // Handles are small (12px dots); this lets a drag that starts within 30px of one
         // still snap to it as a connection start/end, instead of grabbing the node or pane.
         connectionRadius={30}
-        colorMode="dark"
+        colorMode={theme}
         fitView
       >
         <Background />
         <Controls />
-        <MiniMap />
+        <MiniMap
+          style={{ background: "var(--panel)" }}
+          maskColor={theme === "dark" ? "rgba(20,22,31,0.6)" : "rgba(246,247,251,0.6)"}
+          nodeColor="var(--idle)"
+        />
       </ReactFlow>
     </div>
   );

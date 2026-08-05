@@ -1,5 +1,6 @@
-import { useRef, type ChangeEvent, type CSSProperties } from "react";
+import { useRef, type ChangeEvent } from "react";
 import { useEnvStore } from "../state/store";
+import { useThemeStore } from "../state/theme";
 import { buildExport, downloadExport, parseImport } from "../domain/export";
 
 export function TopBar() {
@@ -7,6 +8,7 @@ export function TopBar() {
   const connections = useEnvStore((s) => s.connections);
   const loadEnv = useEnvStore((s) => s.loadEnv);
   const clearEnv = useEnvStore((s) => s.clearEnv);
+  const toggleTheme = useThemeStore((s) => s.toggleTheme);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleExport = () => {
@@ -31,45 +33,40 @@ export function TopBar() {
   };
 
   return (
-    <div
-      style={{
-        height: 48,
-        borderBottom: "1px solid #334155",
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "0 12px",
-        flexShrink: 0,
-      }}
-    >
-      <div style={{ fontWeight: 700 }}>Env Studio</div>
-      <div style={{ opacity: 0.6, fontSize: 12 }}>Trackplan — resource types, assets, dataflow</div>
-      <div style={{ flex: 1 }} />
-      <button onClick={handleImportClick} style={btnStyle}>
-        Import
-      </button>
-      <input ref={fileInputRef} type="file" accept="application/json" onChange={handleFileChange} style={{ display: "none" }} />
-      <button onClick={handleExport} style={btnStyle}>
-        Export JSON
-      </button>
-      <button
-        onClick={() => {
-          if (window.confirm("Clear all assets and connections?")) clearEnv();
-        }}
-        style={{ ...btnStyle, background: "#7f1d1d" }}
-      >
-        Clear
-      </button>
-    </div>
+    <header className="eh-header">
+      <div>
+        <h1>Env Studio</h1>
+        <p>
+          Trackplan — author Resource Types, Assets, and Dataflow connections by hand, then export
+          JSON for an LLM session to check whether a SPEC document covers the scenario.
+        </p>
+      </div>
+      <div className="eh-headerActions">
+        <button className="eh-btn" onClick={handleImportClick}>
+          Import
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json"
+          onChange={handleFileChange}
+          style={{ display: "none" }}
+        />
+        <button className="eh-btn primary" onClick={handleExport}>
+          Export JSON
+        </button>
+        <button
+          className="eh-btn danger"
+          onClick={() => {
+            if (window.confirm("Clear all assets and connections?")) clearEnv();
+          }}
+        >
+          Clear
+        </button>
+        <button className="eh-btn" type="button" onClick={toggleTheme} title="Toggle theme">
+          Toggle theme
+        </button>
+      </div>
+    </header>
   );
 }
-
-const btnStyle: CSSProperties = {
-  background: "#1e293b",
-  color: "#e2e8f0",
-  border: "1px solid #334155",
-  borderRadius: 6,
-  padding: "6px 12px",
-  cursor: "pointer",
-  fontSize: 12,
-};

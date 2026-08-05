@@ -12,43 +12,18 @@ export function Palette() {
   };
 
   return (
-    <div
-      style={{
-        width: 260,
-        borderRight: "1px solid #334155",
-        padding: 12,
-        overflowY: "auto",
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-      }}
-    >
-      <div style={{ fontWeight: 600, marginBottom: 4 }}>Resource Types</div>
+    <div className="eh-sidebar">
+      <div className="eh-sectionLabel">Resource Types</div>
       {PREDEFINED_RESOURCE_TYPES.map((rt) => (
-        <button
-          key={rt.id}
-          onClick={() => handleAdd(rt.id)}
-          style={{
-            textAlign: "left",
-            padding: "8px 10px",
-            border: "1px solid #334155",
-            borderRadius: 6,
-            background: "#1e293b",
-            color: "#e2e8f0",
-            cursor: "pointer",
-          }}
-        >
-          <div style={{ fontWeight: 600, fontSize: 12 }}>{rt.name}</div>
-          <div style={{ fontSize: 10, opacity: 0.75, marginTop: 2 }}>{rt.description}</div>
-          <div style={{ fontSize: 10, opacity: 0.6, marginTop: 4 }}>
-            fanRule: {rt.fanRule} · config: {rt.taskingConfig.sharing}
+        <button key={rt.id} className="eh-resourceCard" onClick={() => handleAdd(rt.id)}>
+          <div className="title">{rt.name}</div>
+          <div className="desc">{rt.description}</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+            <span className="eh-chip">fanRule: {rt.fanRule}</span>
+            <span className="eh-chip">config: {rt.taskingConfig.sharing}</span>
           </div>
-          <div style={{ fontSize: 10, opacity: 0.55, marginTop: 4, fontStyle: "italic" }}>
-            {rt.inspectorRules.portShape}
-          </div>
-          <div style={{ fontSize: 10, opacity: 0.55, marginTop: 2, fontStyle: "italic" }}>
-            {rt.inspectorRules.taskingConfig}
-          </div>
+          <div className="rules">{rt.inspectorRules.portShape}</div>
+          <div className="rules">{rt.inspectorRules.taskingConfig}</div>
         </button>
       ))}
     </div>

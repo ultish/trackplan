@@ -6,9 +6,9 @@ import { InspectorPanel } from "./components/InspectorPanel";
 
 export default function App() {
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#0b1220", color: "#e2e8f0" }}>
+    <div className="eh-app">
       <TopBar />
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+      <div className="eh-body">
         <Palette />
         <ReactFlowProvider>
           <Canvas />

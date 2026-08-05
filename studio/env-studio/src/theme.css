@@ -1,0 +1,186 @@
+/* Env Studio theme — tokens and component classes lifted from
+   claude-review/assembler-coupler-walkthrough.html so the two Trackplan tools
+   (walkthrough + Studio apps) read as one visual family. */
+
+:root {
+  --bg: #f6f7fb; --panel: #ffffff; --ink: #1c2130; --sub: #5b6272; --line: #e1e4ec;
+  --accent: #2f6fed; --accent-ink: #ffffff;
+  --goal: #8a4fff; --bound: #12946b; --frontier: #e2a400; --current: #e0501a; --failed: #d8395a; --idle: #c7cbd6;
+  --switchfill: #eef1fa; --switchline: #8c93a8;
+  --chip-bg: #eef1fa; --code-bg: #f1f3f9;
+  --shadow: 0 1px 2px rgba(20, 24, 40, .06), 0 8px 24px rgba(20, 24, 40, .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161f; --panel: #1b1e29; --ink: #eef0f6; --sub: #9aa1b4; --line: #2b2f3d;
+    --accent: #6d9bff; --accent-ink: #0c0f16;
+    --goal: #b58bff; --bound: #3fd6a3; --frontier: #f3b93a; --current: #ff8452; --failed: #ff6b8b; --idle: #3a3f52;
+    --switchfill: #232739; --switchline: #5a6180;
+    --chip-bg: #242938; --code-bg: #20242f;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .35), 0 8px 28px rgba(0, 0, 0, .35);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14161f; --panel: #1b1e29; --ink: #eef0f6; --sub: #9aa1b4; --line: #2b2f3d;
+  --accent: #6d9bff; --accent-ink: #0c0f16;
+  --goal: #b58bff; --bound: #3fd6a3; --frontier: #f3b93a; --current: #ff8452; --failed: #ff6b8b; --idle: #3a3f52;
+  --switchfill: #232739; --switchline: #5a6180;
+  --chip-bg: #242938; --code-bg: #20242f;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .35), 0 8px 28px rgba(0, 0, 0, .35);
+}
+:root[data-theme="light"] {
+  --bg: #f6f7fb; --panel: #ffffff; --ink: #1c2130; --sub: #5b6272; --line: #e1e4ec;
+  --accent: #2f6fed; --accent-ink: #ffffff;
+  --goal: #8a4fff; --bound: #12946b; --frontier: #e2a400; --current: #e0501a; --failed: #d8395a; --idle: #c7cbd6;
+  --switchfill: #eef1fa; --switchline: #8c93a8;
+  --chip-bg: #eef1fa; --code-bg: #f1f3f9;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root {
+  margin: 0; padding: 0; height: 100%;
+  background: var(--bg); color: var(--ink);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+}
+
+/* ---------- header ---------- */
+.eh-header {
+  padding: 14px 20px; display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; border-bottom: 1px solid var(--line); flex-shrink: 0;
+}
+.eh-header h1 { font-size: 19px; margin: 0 0 4px; }
+.eh-header p { margin: 0; color: var(--sub); font-size: 13px; max-width: 80ch; }
+.eh-headerActions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ---------- buttons ---------- */
+.eh-btn {
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 12.5px;
+  display: inline-flex; align-items: center; gap: 6px; font-family: inherit;
+}
+.eh-btn:hover { border-color: var(--accent); }
+.eh-btn:disabled { opacity: .4; cursor: not-allowed; }
+.eh-btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.eh-btn.danger { color: var(--failed); }
+.eh-btn.danger:hover { border-color: var(--failed); }
+.eh-btn.small { padding: 3px 8px; font-size: 11px; }
+
+/* ---------- panel / card ---------- */
+.eh-panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow); padding: 14px 16px;
+}
+.eh-panel h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--sub);
+  margin: 0 0 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.eh-tag {
+  font-size: 10.5px; text-transform: none; letter-spacing: 0; background: var(--chip-bg);
+  border-radius: 6px; padding: 2px 7px; color: var(--sub); font-weight: 400; white-space: nowrap;
+}
+
+/* ---------- resource type cards (palette) ---------- */
+.eh-resourceCard {
+  text-align: left; background: var(--panel); border: 1.5px solid var(--line); border-radius: 12px;
+  box-shadow: var(--shadow); padding: 10px 12px; cursor: pointer; font: inherit; color: var(--ink);
+  display: flex; flex-direction: column; gap: 5px; transition: border-color .15s ease; width: 100%;
+}
+.eh-resourceCard:hover { border-color: var(--accent); }
+.eh-resourceCard .title { font-size: 13px; font-weight: 650; }
+.eh-resourceCard .desc { font-size: 11.5px; color: var(--sub); line-height: 1.4; }
+.eh-resourceCard .rules { font-size: 10.5px; color: var(--sub); line-height: 1.4; font-style: italic; }
+
+/* ---------- chips / badges ---------- */
+.eh-chip {
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; font-size: 10.5px;
+  color: var(--sub); background: var(--chip-bg); display: inline-flex; align-items: center; gap: 5px;
+  font-weight: 600; letter-spacing: .01em;
+}
+.eh-badge {
+  display: inline-block; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+  background: var(--chip-bg); color: var(--sub);
+}
+.eh-badge.on { background: color-mix(in srgb, var(--bound) 20%, transparent); color: var(--bound); }
+.eh-badge.off { background: color-mix(in srgb, var(--failed) 18%, transparent); color: var(--failed); }
+
+/* ---------- kv ---------- */
+.eh-kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 12.5px; }
+.eh-kv dt { color: var(--sub); }
+.eh-kv dd { margin: 0; }
+
+/* ---------- form controls ---------- */
+.eh-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--sub); }
+.eh-input, .eh-select {
+  background: var(--code-bg); color: var(--ink); border: 1px solid var(--line); border-radius: 6px;
+  padding: 5px 7px; font-size: 12.5px; font-family: inherit;
+}
+.eh-input:focus, .eh-select:focus { outline: none; border-color: var(--accent); }
+.eh-nameInput {
+  width: 100%; background: var(--code-bg); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 9px; font-size: 13.5px; font-weight: 650; font-family: inherit;
+}
+.eh-nameInput:focus { outline: none; border-color: var(--accent); }
+
+/* ---------- task sub-card ---------- */
+.eh-taskCard { border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--code-bg); }
+.eh-taskCard + .eh-taskCard { margin-top: 8px; }
+.eh-taskAdd { border: 1.5px dashed var(--line); border-radius: 10px; padding: 10px; margin-top: 10px; }
+
+.eh-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+/* ---------- layout shell ---------- */
+.eh-app { display: flex; flex-direction: column; height: 100vh; }
+.eh-body { flex: 1; display: flex; min-height: 0; }
+.eh-sidebar {
+  width: 280px; border-right: 1px solid var(--line); padding: 12px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; background: var(--bg);
+}
+.eh-inspector {
+  width: 330px; border-left: 1px solid var(--line); padding: 14px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 12px; flex-shrink: 0; background: var(--bg); font-size: 12.5px;
+}
+.eh-canvasWrap { flex: 1; position: relative; background: var(--bg); }
+.eh-sectionLabel {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--sub); margin: 0 0 2px;
+}
+
+/* ---------- react flow overrides ---------- */
+.react-flow__background circle { fill: var(--idle) !important; opacity: .6; }
+.react-flow__controls {
+  box-shadow: var(--shadow) !important; border-radius: 10px !important; overflow: hidden;
+  border: 1px solid var(--line) !important;
+}
+.react-flow__controls-button {
+  background: var(--panel) !important; border-bottom: 1px solid var(--line) !important; fill: var(--ink) !important;
+}
+.react-flow__controls-button:hover { background: var(--chip-bg) !important; }
+.react-flow__minimap { border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); border: 1px solid var(--line); }
+.react-flow__edge-path { stroke: var(--idle); }
+.react-flow__edge-text { fill: var(--sub); }
+.react-flow__edge.selected .react-flow__edge-path { stroke: var(--accent); }
+.react-flow__attribution { background: transparent !important; color: var(--sub) !important; font-size: 10px !important; }
+
+/* ---------- asset node ---------- */
+.eh-node {
+  width: 220px; border: 2px solid var(--line); border-radius: 12px; background: var(--panel);
+  color: var(--ink); font-size: 12px; box-shadow: var(--shadow); overflow: hidden;
+}
+.eh-node.selected { border-color: var(--accent); }
+.eh-node .nodeHeader {
+  padding: 6px 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column;
+  justify-content: center; cursor: grab; background: var(--chip-bg);
+}
+.eh-node .nodeHeader:active { cursor: grabbing; }
+.eh-node .nodeTitle { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.eh-node .nodeSub { opacity: .8; font-size: 10px; color: var(--sub); }
+.eh-node .portRow { position: absolute; left: 0; right: 0; display: flex; align-items: center; }
+.eh-node .portLabel { font-size: 10px; color: var(--sub); }
+.eh-node .nodeFooter { padding: 4px 10px; border-top: 1px solid var(--line); font-size: 10px; }
+.eh-node .nodeFooter.valid { color: var(--bound); }
+.eh-node .nodeFooter.invalid { color: var(--failed); }
+
+.eh-toast {
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  background: color-mix(in srgb, var(--failed) 88%, var(--panel)); color: white;
+  padding: 7px 14px; border-radius: 8px; font-size: 12.5px; z-index: 10; box-shadow: var(--shadow);
+}

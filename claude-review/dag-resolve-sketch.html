@@ -1,0 +1,939 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Route the Whole Bus</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#e5e8e3; --sheet:#f6f7f3; --ink:#13242b; --muted:#566a71; --rule:#c1cac5;
+  --l1:#1e4fd6; --l2:#f08a00; --bad:#d32f2f; --hl:#ffd54a; --on-ink:#f6f7f3;
+  --font:"Overpass","Helvetica Neue",Arial,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0f1a1f; --sheet:#16252b; --ink:#e7efea; --muted:#93a5ab; --rule:#2b3e45;
+    --l1:#6c9bff; --l2:#ffa733; --bad:#ff6b6b; --hl:#c9a100; --on-ink:#0f1a1f;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0f1a1f; --sheet:#16252b; --ink:#e7efea; --muted:#93a5ab; --rule:#2b3e45;
+  --l1:#6c9bff; --l2:#ffa733; --bad:#ff6b6b; --hl:#c9a100; --on-ink:#0f1a1f;
+}
+*{box-sizing:border-box}
+html{background:var(--paper);scroll-behavior:smooth}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 17px/1.6 var(--font);overflow-x:hidden}
+.wrap{max-width:1240px;margin:0 auto;padding:0 24px}
+:focus-visible{outline:3px solid var(--l1);outline-offset:3px;border-radius:4px}
+@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}
+
+.mast{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;padding:40px 0 20px;flex-wrap:wrap}
+h1{margin:0;font-weight:900;font-size:clamp(2.8rem,7.5vw,5.5rem);line-height:.9;letter-spacing:-.04em}
+.lede{margin:16px 0 0;max-width:56ch;color:var(--muted);font-size:1.15rem}
+.lede b{color:var(--ink);font-weight:800}
+.themeBtn{font:inherit;font-size:.875rem;color:var(--muted);background:none;border:1px solid var(--rule);border-radius:999px;padding:5px 14px;cursor:pointer}
+.themeBtn:hover{color:var(--ink);border-color:var(--ink)}
+
+/* story: text scrolls on the left, the map stays put on the right */
+.story{display:grid;grid-template-columns:minmax(300px,410px) 1fr;gap:40px;align-items:start}
+.beats{padding-bottom:30vh}
+.chapter{padding-top:12vh}
+.chapter:first-child{padding-top:6vh}
+.chapter h2{margin:0 0 4vh;font-weight:900;font-size:clamp(1.7rem,3.4vw,2.4rem);line-height:1.02;letter-spacing:-.03em}
+.chapter h2 .cn{display:inline-grid;place-items:center;width:1.55em;height:1.55em;margin-right:.45em;border-radius:50%;background:var(--ink);color:var(--on-ink);font-size:.62em;vertical-align:.18em;letter-spacing:0}
+.beat{min-height:62vh;padding:2vh 0 8vh;opacity:.32;transition:opacity .3s}
+.beat.on{opacity:1}
+.beat h3{margin:0 0 10px;font-weight:800;font-size:1.3rem;line-height:1.2;letter-spacing:-.015em}
+.beat p{margin:0 0 12px;max-width:46ch}
+.beat p.why{color:var(--muted)}
+.beat b{font-weight:800}
+.beat code{font:inherit;font-weight:800;background:color-mix(in srgb,var(--hl) 38%,transparent);padding:0 .25em;border-radius:4px}
+.beat .set{font-weight:800;white-space:nowrap}
+.beat svg.fig{width:100%;height:auto;display:block;background:var(--sheet);border-radius:14px;margin:14px 0 4px}
+.beat svg.fig text{font-family:var(--font)}
+
+.stage{position:sticky;top:16px}
+.stageCard{background:var(--sheet);border-radius:18px;padding:14px 8px 10px}
+.stageHead{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:0 14px 4px}
+.stageHead .ct{font-weight:800;font-size:1rem}
+.dots{display:flex;gap:6px}
+.dots i{width:9px;height:9px;border-radius:50%;background:var(--rule)}
+.dots i.d{background:var(--ink)}
+.dots i.c{background:var(--ink);outline:3px solid color-mix(in srgb,var(--hl) 70%,transparent)}
+#storyMap,#playMap{width:100%;height:auto;display:block}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;padding:2px 14px 4px;font-size:.84rem;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.sw{width:15px;height:15px;border-radius:50%;border:2.5px solid var(--ink);background:var(--sheet);display:inline-block}
+.sw.chosen{background:var(--ink)} .sw.fixed{background:var(--hl)} .sw.pruned{border-color:var(--bad);border-style:dashed;background:color-mix(in srgb,var(--bad) 10%,var(--sheet))}
+.sw.shelved{border-style:dashed;opacity:.5}
+@media (max-width:900px){
+  .story{grid-template-columns:1fr;gap:0}
+  .stage{order:-1;top:0;z-index:5;margin:0 -24px;padding:8px 8px 0;background:var(--paper)}
+  .stageScroll{overflow-x:auto}
+  .stageScroll svg{min-width:640px}
+  .beat{min-height:48vh}
+}
+
+/* playground */
+section.band{padding:12vh 0 0}
+section.band>h2{margin:0 0 8px;font-weight:900;font-size:clamp(1.7rem,3.4vw,2.4rem);line-height:1.02;letter-spacing:-.03em}
+section.band>p.sub{margin:0 0 24px;color:var(--muted);max-width:62ch}
+.routes{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 10px}
+.route{display:flex;align-items:center;gap:10px;font:inherit;color:var(--ink);background:var(--sheet);border:2px solid transparent;border-radius:999px;padding:6px 18px 6px 6px;cursor:pointer;text-align:left}
+.route:hover{border-color:var(--rule)}
+.route[aria-pressed="true"]{border-color:var(--ink)}
+.route .num{display:grid;place-items:center;width:34px;height:34px;border-radius:50%;background:var(--ink);color:var(--on-ink);font-weight:900}
+.route .nm{font-weight:800;line-height:1.15}
+.route .nm small{display:block;font-weight:400;color:var(--muted);font-size:.8125rem}
+.route.unsat .num{background:var(--bad);color:#fff}
+.blurb{margin:0 0 14px;max-width:72ch;color:var(--muted)}
+.play{background:var(--sheet);border-radius:18px 18px 0 0;padding:6px 6px 0}
+.hint{margin:0;padding:2px 14px 10px;font-size:.8125rem;color:var(--muted);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.hint button{font:inherit;font-size:.8125rem;color:var(--muted);background:none;border:1px solid var(--rule);border-radius:999px;padding:1px 10px;cursor:pointer}
+.hint button:hover{color:var(--ink);border-color:var(--ink)}
+.board{background:var(--ink);color:var(--on-ink);border-radius:0 0 18px 18px;padding:18px 22px 16px}
+.boardTop{display:flex;gap:16px;align-items:flex-start}
+#kind{flex:none;min-width:64px;text-align:center;font-weight:900;font-size:.8125rem;padding:5px 10px;border-radius:6px;background:var(--hl);color:#13242b}
+#kind.good{background:var(--on-ink);color:var(--ink)}
+#kind.bad{background:var(--bad);color:#fff}
+#stepTitle{margin:0;font-size:1.3rem;font-weight:800;line-height:1.2}
+#stepDetail{margin:6px 0 0;max-width:76ch;font-size:.9375rem;opacity:.82;white-space:pre-line}
+.ctl{display:flex;align-items:center;gap:8px;margin-top:16px;flex-wrap:wrap}
+.ctl button{font:inherit;font-weight:600;font-size:.875rem;color:var(--on-ink);background:transparent;border:1.5px solid color-mix(in srgb,var(--on-ink) 40%,transparent);border-radius:999px;padding:5px 14px;cursor:pointer}
+.ctl button:hover:not(:disabled){border-color:var(--on-ink)}
+.ctl button:disabled{opacity:.3;cursor:default}
+.ctl button.go{background:var(--on-ink);color:var(--ink);border-color:var(--on-ink);font-weight:800}
+#scrub{flex:1;min-width:120px;accent-color:var(--hl)}
+#count{font-variant-numeric:tabular-nums;font-size:.875rem;opacity:.75;min-width:56px;text-align:right}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:36px;margin-top:28px}
+@media (max-width:820px){.two{grid-template-columns:1fr}}
+.shapeLine{margin:0;font-size:1.0625rem;max-width:70ch}
+.res-sat{color:var(--l1);font-weight:800} .res-unsat{color:var(--bad);font-weight:800}
+table{width:100%;border-collapse:collapse}
+table.cheat td,table.cheat th{padding-right:18px;vertical-align:top}
+table.cheat td:first-child{white-space:nowrap}
+@media (max-width:700px){table.cheat thead{display:none}table.cheat tr{display:block;border-bottom:1px solid var(--rule);padding:10px 0}table.cheat td{display:block;border:0;padding:2px 0}}
+th{font-weight:600;font-size:.8125rem;color:var(--muted);text-align:left;padding:0 8px 8px 0;border-bottom:2px solid var(--ink)}
+td{padding:9px 8px 9px 0;border-bottom:1px solid var(--rule);vertical-align:middle}
+tr.focus td{background:color-mix(in srgb,var(--hl) 32%,transparent)}
+td.st{font-weight:800;width:5.5rem}
+.plat{display:inline-grid;place-items:center;min-width:2.1rem;height:1.7rem;margin-right:6px;padding:0 6px;border:2px solid var(--ink);border-radius:999px;font-weight:800;font-size:.8125rem;background:var(--sheet)}
+.plat.chosen{background:var(--ink);color:var(--on-ink)}
+.plat.fixed{background:var(--hl);color:#13242b}
+.plat.none{border-color:var(--bad);color:var(--bad);border-style:dashed}
+.dash{color:var(--muted)}
+#log{display:flex;flex-direction:column;max-height:420px;overflow:auto;border-top:2px solid var(--ink)}
+.li{display:flex;gap:12px;align-items:baseline;text-align:left;font:inherit;font-size:.9375rem;color:var(--muted);background:none;border:0;border-bottom:1px solid var(--rule);padding:8px 8px 8px 0;cursor:pointer}
+.li:hover{color:var(--ink)}
+.li.here{color:var(--ink);font-weight:800;background:color-mix(in srgb,var(--hl) 32%,transparent)}
+.li .n{flex:none;width:1.6rem;font-variant-numeric:tabular-nums;text-align:right}
+.li .k{flex:none;width:8px;height:8px;border-radius:50%;background:var(--hl);align-self:center}
+.li .k.good{background:var(--ink)} .li .k.bad{background:var(--bad)}
+
+.three{display:grid;grid-template-columns:repeat(3,1fr);gap:32px}
+@media (max-width:900px){.three{grid-template-columns:1fr;gap:22px}}
+.three h3{margin:0 0 8px;font-weight:800;font-size:1.125rem;padding-top:10px;border-top:3px solid var(--ink)}
+.three ul{margin:0;padding-left:1.1em;color:var(--muted)}
+.three li{margin:6px 0} .three li b{color:var(--ink)}
+footer{padding:40px 0 72px;color:var(--muted);font-size:.875rem;max-width:84ch}
+
+/* map svg */
+.ghost{fill:none;stroke:var(--rule);stroke-width:18;stroke-linecap:round;stroke-linejoin:round;opacity:.7}
+.track{fill:none;stroke:var(--muted);stroke-width:1.8;opacity:.5}
+.track.dim{opacity:.1}
+.track.hot{stroke:var(--hl);stroke-width:7;opacity:1}
+.seg{fill:none;stroke-width:8;stroke-linecap:round;stroke-linejoin:round}
+.seg.draw{stroke-dasharray:1;stroke-dashoffset:1;animation:draw .7s ease-out forwards}
+@keyframes draw{to{stroke-dashoffset:0}}
+.glow{fill:var(--hl);opacity:.55}
+.ann{paint-order:stroke;stroke:var(--sheet);stroke-width:5px;stroke-linejoin:round}
+.track.strong{stroke:var(--ink);stroke-width:2.6;opacity:.85}
+.ghost.strong{stroke:var(--muted);opacity:.5}
+.cap{fill:var(--sheet);stroke:var(--ink);stroke-width:2.5}
+.stopName{font-size:23px;font-weight:900;fill:var(--ink);text-anchor:middle}
+.stopSub{font-size:15px;fill:var(--muted);text-anchor:middle}
+.pf{cursor:default}
+.pf.live{cursor:pointer}
+.pf circle{stroke-width:2.6;fill:var(--sheet);stroke:var(--ink);transition:fill .25s,stroke .25s}
+.pf text{font-size:15px;font-weight:800;fill:var(--ink);text-anchor:middle;pointer-events:none}
+.pf.fixed circle{fill:var(--hl)}
+.pf.chosen circle{fill:var(--ink)} .pf.chosen text{fill:var(--on-ink)}
+.pf.pruned circle{stroke:var(--bad);stroke-dasharray:4 3;fill:color-mix(in srgb,var(--bad) 10%,var(--sheet))}
+.pf.pruned text{fill:var(--bad);opacity:.8}
+.pf.shelved{opacity:.45} .pf.shelved circle{stroke-dasharray:3 3}
+.pf.off{opacity:.55} .pf.off circle{stroke:var(--muted);stroke-dasharray:1 4;fill:transparent} .pf.off text{fill:var(--muted)}
+.pf.live:hover circle{stroke-width:4}
+.key text{font-size:16px;font-weight:800;fill:var(--ink)}
+@media (prefers-reduced-motion: reduce){.seg.draw{animation:none;stroke-dasharray:none;stroke-dashoffset:0}.beat{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="mast">
+  <div>
+    <h1>Route the<br>whole bus</h1>
+    <p class="lede">Fan-out and fan-in, explained by scrolling. A trip with several passengers should be <b>one request</b>, not several trips that copy each other. The text on the left walks through the idea one step at a time, and the map on the right changes to match.</p>
+  </div>
+  <button id="themeBtn" class="themeBtn" type="button">Switch theme</button>
+</header>
+
+<div class="story">
+  <div class="beats" id="beats"></div>
+  <aside class="stage" aria-label="Route map">
+    <div class="stageCard">
+      <div class="stageHead"><span class="ct" id="stageTitle"></span><span class="dots" id="stageDots"></span></div>
+      <div class="stageScroll"><svg id="storyMap" viewBox="0 0 1000 520" role="img" aria-label="Route map for the current step"></svg></div>
+      <div class="legend">
+        <span><i class="sw"></i>open platform</span>
+        <span><i class="sw pruned"></i>dropped</span>
+        <span><i class="sw fixed"></i>pinned and being tried</span>
+        <span><i class="sw chosen"></i>chosen</span>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<section class="band" id="shapes">
+  <h2>Which shape needs what</h2>
+  <p class="sub">Ignore the arrows and count. A connected request with N stops and N−1 links is a tree. Every extra link is a loop.</p>
+  <table class="cheat">
+    <thead><tr><th>Shape</th><th>Example</th><th>What the solver does</th><th>Backtracking</th></tr></thead>
+    <tbody>
+      <tr><td><b>Fan-out</b></td><td>One start, several ends</td><td>Prune from the ends inward, then pick from the base outward.</td><td>None</td></tr>
+      <tr><td><b>Fan-in</b></td><td>Several starts, one join</td><td>Same pass. The join keeps the overlap of what every branch can reach.</td><td>None</td></tr>
+      <tr><td><b>Split and rejoin</b></td><td>One start, branches meet again</td><td>Pin one stop on the loop, try each of its platforms, run the tree pass for each.</td><td>Only over the pinned stop’s platforms</td></tr>
+      <tr><td><b>Several loops</b></td><td>Two diamonds in one request</td><td>Pin one stop per loop, or a stop shared by both when one exists.</td><td>Multiplies with each pinned stop</td></tr>
+    </tbody>
+  </table>
+  <p class="sub" style="margin-top:18px">Fan-outs and fan-ins can be mixed freely in the same request, as long as no route forks and comes back together. Only loops cost extra, and a request with no loop never searches.</p>
+</section>
+
+<section class="band" id="try">
+  <h2>Try it yourself</h2>
+  <p class="sub">The same solver, with every internal step visible. Click any platform to take it out of service and watch the route re-solve. Try taking out <b>D2</b> in the fan-out.</p>
+  <nav class="routes" id="routes" aria-label="Scenario"></nav>
+  <p class="blurb" id="blurb"></p>
+  <div class="play">
+    <svg id="playMap" viewBox="0 0 1000 520" role="img" aria-label="Interactive route map"></svg>
+    <p class="hint">Click a platform to toggle it. <button id="resetOff" type="button">Put them all back</button></p>
+  </div>
+  <div class="board">
+    <div class="boardTop">
+      <span id="kind">STEP</span>
+      <div><h3 id="stepTitle">—</h3><p id="stepDetail">—</p></div>
+    </div>
+    <div class="ctl">
+      <button id="bFirst" type="button">⏮ Start</button>
+      <button id="bPrev" type="button">◀ Back</button>
+      <button id="bPlay" class="go" type="button">▶ Play</button>
+      <button id="bNext" type="button">Next ▶</button>
+      <button id="bLast" type="button">End ⏭</button>
+      <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Step">
+      <span id="count">1 / 1</span>
+    </div>
+  </div>
+  <div class="two">
+    <div>
+      <p class="shapeLine" id="shapeLine"></p>
+      <table style="margin-top:14px"><thead><tr><th>Stop</th><th>Platforms still open</th><th>Assigned</th></tr></thead><tbody id="dom"></tbody></table>
+    </div>
+    <div id="log"></div>
+  </div>
+</section>
+
+<section class="band">
+  <h2>Where this would sit</h2>
+  <p class="sub">A proposal on top of the Assembler and Coupler, not something taken from the spec.</p>
+  <div class="three">
+    <div>
+      <h3>What stays</h3>
+      <ul>
+        <li><b>Coupler ExpandKey</b> still answers which assets a slot can reach. Its result becomes the slot's open platforms instead of one bound pick.</li>
+        <li><b>Inspectors</b> still gate a candidate. A failed inspect removes a platform.</li>
+        <li><b>Lowest g first</b> still chooses among the survivors.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>What changes</h3>
+      <ul>
+        <li>The leg loop becomes a <b>resolver over a DAG</b>: prune from the ends inward, then pick from the base back out.</li>
+        <li>A <b>shape check</b> comes first. A tree needs no search. A loop pins one stop and tries its platforms in turn.</li>
+        <li>Backtrack targets the <b>pinned stop</b>, not the previous leg.</li>
+        <li>UNSAT names <b>the stop that emptied</b>, which feeds the resolve trace.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Still open</h3>
+      <ul>
+        <li><b>Checkpoint (C2c):</b> a stop is probably safe to checkpoint once all its neighbours are bound.</li>
+        <li><b>Time:</b> a shared asset may be wanted in different windows. Is compatibility time-aware?</li>
+        <li><b>Several loops:</b> one pinned stop may not break them all, and cost multiplies with each.</li>
+        <li><b>Sticky cache:</b> keyed on the request shape and domains, not a path.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <p>Formal names, for searching later: pruning from the ends inward is directional arc consistency on a tree-structured constraint problem; pinning a stop on a loop is cutset conditioning. This page is a sketch and is not connected to the engine.</p>
+</footer>
+</div>
+
+<script id="solver">
+/* ================= SCENARIOS =================
+   slots: x,y = top-left in the 900x470 viewBox. edges: [from, to, compatible asset pairs]. */
+const SCEN = [
+  {
+    id:'fanout', label:'1 · Fan-out', diff:'Simple', dcls:'d-simple', outcome:'sat',
+    title:'Shared trunk, two last-node branches',
+    desc:'A→B→C→D then E and F both hang off D. Only D2 can reach F1, so the trunk is forced onto the “2” assets. A tree: zero backtracking.',
+    slots:[
+      {id:'A', x:20,  y:165, pool:['A1','A2']},
+      {id:'B', x:190, y:165, pool:['B1','B2']},
+      {id:'C', x:360, y:165, pool:['C1','C2']},
+      {id:'D', x:530, y:165, pool:['D1','D2']},
+      {id:'E', x:760, y:60,  pool:['E1','E2'], sub:'task 1 sink'},
+      {id:'F', x:760, y:285, pool:['F1'],       sub:'task 2 sink'},
+    ],
+    edges:[
+      ['A','B',[['A1','B1'],['A2','B2']]],
+      ['B','C',[['B1','C1'],['B2','C2']]],
+      ['C','D',[['C1','D1'],['C2','D2']]],
+      ['D','E',[['D1','E1'],['D2','E2']]],
+      ['D','F',[['D2','F1']]],
+    ],
+  },
+  {
+    id:'fanin', label:'2 · Fan-in', diff:'Simple', dcls:'d-simple', outcome:'sat',
+    title:'Two tasks start apart and meet at C',
+    desc:'Task 1 starts at A, task 2 starts at A′, and both must end up on the same C. With no shared start there is no loop, so this is a tree: the join just takes the overlap of what each side can reach.',
+    slots:[
+      {id:'A',  x:20,  y:30,  pool:['A1','A2'], sub:'task 1 start'},
+      {id:'B',  x:230, y:30,  pool:['B1','B2']},
+      {id:'Ap', x:20,  y:290, pool:['A3','A4'], sub:'task 2 start', label:'A′'},
+      {id:'Bp', x:230, y:290, pool:['B3','B4'], label:'B′'},
+      {id:'C',  x:450, y:150, pool:['C1','C2'], sub:'join'},
+      {id:'D',  x:700, y:150, pool:['D1']},
+    ],
+    edges:[
+      ['A','B',  [['A1','B1'],['A2','B2']]],
+      ['B','C',  [['B1','C1'],['B2','C2']]],
+      ['Ap','Bp',[['A3','B3'],['A4','B4']]],
+      ['Bp','C', [['B3','C2'],['B4','C2']]],
+      ['C','D',  [['C1','D1'],['C2','D1']]],
+    ],
+  },
+  {
+    id:'diamond', label:'3 · Split and rejoin', diff:'Medium', dcls:'d-medium', outcome:'sat',
+    title:'One start splits, then the branches must rejoin at one C',
+    desc:'A splits into B (task 1) and B′ (task 2), which rejoin at C. Local pruning finds nothing to remove, yet A1 is a dead end. Needs the cutset loop: try A1, fail, try A2.',
+    slots:[
+      {id:'A',  x:20,  y:150, pool:['A1','A2']},
+      {id:'B',  x:230, y:30,  pool:['B1','B2'], sub:'task 1 branch'},
+      {id:'Bp', x:230, y:290, pool:['B3','B4'], sub:'task 2 branch', label:'B′'},
+      {id:'C',  x:450, y:150, pool:['C1','C2'], sub:'join'},
+      {id:'D',  x:700, y:150, pool:['D1']},
+    ],
+    edges:[
+      ['A','B',  [['A1','B1'],['A2','B2']]],
+      ['A','Bp', [['A1','B3'],['A2','B4']]],
+      ['B','C',  [['B1','C1'],['B2','C2']]],
+      ['Bp','C', [['B3','C2'],['B4','C1'],['B4','C2']]],
+      ['C','D',  [['C1','D1'],['C2','D1']]],
+    ],
+  },
+  {
+    id:'unsat', label:'4 · No answer', diff:'Hardest', dcls:'d-hardest', outcome:'unsat',
+    title:'Every asset has local support, yet no joint answer',
+    desc:'Same diamond, but B′ and B never agree on a C. Local pruning still removes nothing (that is the trap). Only the cutset loop proves UNSAT, and names C as the slot that empties.',
+    slots:[
+      {id:'A',  x:20,  y:150, pool:['A1','A2']},
+      {id:'B',  x:230, y:30,  pool:['B1','B2'], sub:'task 1 branch'},
+      {id:'Bp', x:230, y:290, pool:['B3','B4'], sub:'task 2 branch', label:'B′'},
+      {id:'C',  x:450, y:150, pool:['C1','C2'], sub:'join'},
+      {id:'D',  x:700, y:150, pool:['D1']},
+    ],
+    edges:[
+      ['A','B',  [['A1','B1'],['A2','B2']]],
+      ['A','Bp', [['A1','B3'],['A2','B4']]],
+      ['B','C',  [['B1','C1'],['B2','C2']]],
+      ['Bp','C', [['B3','C2'],['B4','C1']]],
+      ['C','D',  [['C1','D1'],['C2','D1']]],
+    ],
+  },
+];
+
+/* ================= SOLVER =================
+   Builds the full step list. Every snapshot is self-contained so the UI can scrub. */
+function solve(sc, offline){
+  const slots = sc.slots.map(s => ({...s, label:s.label||s.id, pool:s.pool.filter(a=>!offline.has(a))}));
+  const order = slots.map(s=>s.id);
+  const lbl = id => slots.find(s=>s.id===id).label;
+  const adj = {}, nbr = {};
+  slots.forEach(s=>{ nbr[s.id]=[]; s.pool.forEach(a=>adj[a]=new Set()); });
+  sc.edges.forEach(([a,b,pairs])=>{
+    nbr[a].push(b); nbr[b].push(a);
+    pairs.forEach(([x,y])=>{ if(adj[x] && adj[y]){ adj[x].add(y); adj[y].add(x); } });
+  });
+  const dom = {}; slots.forEach(s=>dom[s.id]=[...s.pool]);
+  let fixed = {}, chosen = {}, shelved = {};
+  const steps = [];
+  const clone = o => JSON.parse(JSON.stringify(o));
+  const snap = (kind,title,detail,focus=[],hot=[]) =>
+    steps.push({kind,title,detail,focus,hot,dom:clone(dom),fixed:{...fixed},chosen:{...chosen},shelved:clone(shelved)});
+  const set = arr => '{' + (arr.length ? arr.join(', ') : '∅') + '}';
+  const supported = (x, slotId) => dom[slotId].some(y => adj[x].has(y));
+
+  const components = active => {
+    const seen = new Set(), comps = [];
+    for(const id of order){
+      if(!active.has(id) || seen.has(id)) continue;
+      const comp = [], q = [id]; seen.add(id);
+      while(q.length){ const v = q.shift(); comp.push(v);
+        nbr[v].forEach(n=>{ if(active.has(n) && !seen.has(n)){ seen.add(n); q.push(n); } }); }
+      comps.push(comp);
+    }
+    return comps;
+  };
+  const edgeCount = active => sc.edges.filter(([a,b])=>active.has(a)&&active.has(b)).length;
+  const isForest = active => edgeCount(active) === active.size - components(active).length;
+
+  const all = new Set(order);
+  const cyclic = !isForest(all);
+  let cutsetCands = [], cutset = null;
+  if(cyclic){
+    cutsetCands = order.filter(id => { const a = new Set(all); a.delete(id); return isForest(a); });
+    cutset = cutsetCands.slice().sort((p,q)=>slots.find(s=>s.id===p).pool.length - slots.find(s=>s.id===q).pool.length || order.indexOf(p)-order.indexOf(q))[0];
+  }
+  const shape = { slots:slots.length, edges:sc.edges.length, cyclic, cutset, cutsetCands, root:null, failedSlot:null, outcome:null };
+
+  const orient = active => components(active).map(comp=>{
+    const deg = id => nbr[id].filter(n=>active.has(n)).length;
+    const root = comp.slice().sort((p,q)=>deg(q)-deg(p)||order.indexOf(p)-order.indexOf(q))[0];
+    const parent = {[root]:null}, kids = {}, pre = [];
+    (function dfs(v){ pre.push(v); kids[v]=[]; nbr[v].forEach(n=>{ if(active.has(n) && !(n in parent)){ parent[n]=v; kids[v].push(n); dfs(n); } }); })(root);
+    return {root, pre, parent, kids};
+  });
+
+  /* Leaves→root prune then root→leaves pick on a forest. Returns {ok, slot}. */
+  function forestSolve(active){
+    const trees = orient(active);
+    shape.root = trees.map(t=>t.root).join(', ');
+    snap('PLAN','Root the tree'+(trees.length>1?'s':'')+' at the join slot'+(trees.length>1?'s':''),
+      trees.map(t=>`Root ${lbl(t.root)} (highest degree). Prune order, leaves first: ${t.pre.slice().reverse().map(lbl).join(' → ')}.`).join('\n') +
+      '\nA leaf has nothing below it to check; each inner slot keeps only candidates that have support in every child.');
+    for(const t of trees){
+      for(const v of t.pre.slice().reverse()){
+        const ks = t.kids[v]; if(!ks.length) continue;
+        const via = ks.map(c => ({c, ok: dom[v].filter(x=>supported(x,c))}));
+        const keep = dom[v].filter(x => ks.every(c=>supported(x,c)));
+        const gone = dom[v].filter(x => !keep.includes(x));
+        const inter = `via ${via.map(o=>lbl(o.c)+' '+set(o.ok)).join(' · ')}  →  ∩ ${set(keep)}`;
+        const why = gone.map(x=>{ const c = ks.find(k=>!supported(x,k)); return `${x}: no ${lbl(c)} candidate is compatible`; }).join('\n');
+        dom[v] = keep;
+        if(!keep.length){
+          snap('FAIL',`${lbl(v)} has no candidate left`,
+            `${inter}\nThe branches below ${lbl(v)} cannot agree on any single ${lbl(v)} asset.\n${why}`, [v, ...ks]);
+          return {ok:false, slot:v};
+        }
+        snap('PRUNE',`Prune ${lbl(v)} against ${ks.map(lbl).join(', ')}`,
+          `${inter}\n` + (gone.length ? why : `Nothing removed: every ${lbl(v)} candidate has support in every child.`), [v, ...ks]);
+      }
+    }
+    for(const t of trees){
+      for(const v of t.pre){
+        const p = t.parent[v];
+        const pick = p===null ? dom[v][0] : dom[v].find(y=>adj[chosen[p]].has(y));
+        chosen[v] = pick;
+        snap('PICK',`Pick ${pick} for ${lbl(v)}`,
+          p===null ? `Root: first surviving candidate of ${set(dom[v])} (ties by pool order; cost ordering would slot in here).`
+                   : `Must be compatible with ${chosen[p]} (parent ${lbl(p)}). Survivors ${set(dom[v])}; first compatible is ${pick}. Cannot dead-end: pruning already guaranteed support.`,
+          [v], p===null ? [] : [[chosen[p], pick]]);
+      }
+    }
+    return {ok:true};
+  }
+
+  snap('SETUP', 'Goal DAG: '+sc.title,
+    `${slots.length} slots, ${sc.edges.length} constraint edges. Each slot starts with its reachable candidates (the Coupler/Inspector output). Required sharing means one asset per slot, whichever branch uses it.`);
+
+  if(!cyclic){
+    snap('SHAPE','Shape check: acyclic (a tree)',
+      'No cycle when direction is ignored. Leaves→root pruning plus root→leaves picking is complete: if the root keeps a candidate, a full solution exists and the pick pass cannot get stuck. No search needed.');
+    const r = forestSolve(all);
+    shape.outcome = r.ok ? 'SAT' : 'UNSAT'; shape.failedSlot = r.ok ? null : r.slot;
+    snap(r.ok?'DONE':'UNSAT', r.ok?'Solved, no backtracking':'UNSAT', r.ok
+      ? order.map(id=>`${lbl(id)}=${chosen[id]}`).join('  ')
+      : `${lbl(r.slot)} ran out of candidates.`);
+    return {steps, shape};
+  }
+
+  snap('SHAPE','Shape check: a cycle exists (diamond)',
+    'Ignoring direction, the branches fork and rejoin, so the constraint graph has a cycle. Leaves→root pruning alone is not complete here: a branch can be locally fine and still disagree with its sibling at the join.');
+
+  /* one local-consistency sweep over the whole graph */
+  const removed = [];
+  let changed = true;
+  while(changed){
+    changed = false;
+    for(const [a,b] of sc.edges) for(const [u,w] of [[a,b],[b,a]]){
+      const keep = dom[u].filter(x=>supported(x,w));
+      dom[u].filter(x=>!keep.includes(x)).forEach(x=>removed.push(`${x} (no ${lbl(w)} support)`));
+      if(keep.length !== dom[u].length){ dom[u]=keep; changed = true; }
+    }
+  }
+  if(removed.length && order.some(id=>!dom[id].length)){
+    const dead = order.find(id=>!dom[id].length);
+    snap('FAIL',`Local pruning empties ${lbl(dead)}`, `Removed: ${removed.join(', ')}.\nUNSAT detected without any search.`, [dead]);
+    shape.outcome='UNSAT'; shape.failedSlot=dead;
+    snap('UNSAT','UNSAT', `${lbl(dead)} has no candidate that satisfies its neighbours.`);
+    return {steps, shape};
+  }
+  snap('PRUNE','Local pruning (every edge, both directions)',
+    removed.length ? `Removed: ${removed.join(', ')}.\nThis does not prove SAT: cycles can hide a contradiction.`
+                   : 'Removed nothing: every candidate has a compatible partner across every single edge. That looks fine, but it only checks edges one at a time, never the join across two branches.');
+
+  const cutsetPool = [...dom[cutset]];
+  snap('SHAPE',`Cutset: fix ${lbl(cutset)}, then it is a tree again`,
+    `Removing any slot on the cycle leaves a forest. Candidates: ${cutsetCands.map(lbl).join(', ')}. Pick the smallest pool, ties earliest → ${lbl(cutset)} with ${set(cutsetPool)}. Cost is at most one tree solve per value.`, [cutset]);
+
+  const base = clone(dom), failures = [];
+  for(const val of cutsetPool){
+    Object.keys(base).forEach(k=>dom[k]=[...base[k]]);
+    fixed = {}; chosen = {}; shelved = {};
+    shelved[cutset] = cutsetPool.filter(v=>v!==val);
+    dom[cutset] = [val]; fixed[cutset] = val; chosen[cutset] = val;
+    snap('FIX',`Fix ${lbl(cutset)} = ${val}`, `Other values ${set(shelved[cutset])} are shelved for now.`, [cutset]);
+    let dead = null;
+    const detail = [];
+    for(const n of nbr[cutset]){
+      dom[n] = dom[n].filter(y=>adj[val].has(y));
+      detail.push(`${lbl(n)} ${set(dom[n])}`);
+      if(!dom[n].length) dead = n;
+    }
+    snap(dead?'FAIL':'PRUNE',`${dead?'Dead end':'Filter'}: neighbours of ${lbl(cutset)} against ${val}`,
+      `Neighbours keep only partners of ${val}: ${detail.join(' · ')}.` + (dead?`\n${lbl(dead)} has nothing left → try the next value.`:''), [cutset, ...nbr[cutset]]);
+    let res = {ok:!dead, slot:dead};
+    if(res.ok){
+      const act = new Set(all); act.delete(cutset);
+      res = forestSolve(act);
+    }
+    if(res.ok){
+      shape.outcome='SAT';
+      snap('DONE',`Solved with ${lbl(cutset)} = ${val}`, order.map(id=>`${lbl(id)}=${chosen[id]}`).join('  ') + `\nBacktracked ${failures.length}× over the cutset slot only; nothing else was retried.`);
+      return {steps, shape};
+    }
+    failures.push(`${lbl(cutset)}=${val}: ${lbl(res.slot)} emptied`);
+    shape.failedSlot = res.slot;
+  }
+  Object.keys(base).forEach(k=>dom[k]=[...base[k]]); fixed={}; chosen={}; shelved={};
+  shape.outcome='UNSAT';
+  snap('UNSAT','UNSAT: every cutset value fails', failures.join('\n') + `\nThe contradiction is at ${lbl(shape.failedSlot)}: the branches never agree on one asset there. That is the slot to report in the resolve trace.`, [shape.failedSlot]);
+  return {steps, shape};
+}
+</script>
+
+<script id="beats">
+/* Each beat shows solver snapshot `at` of scenario `scn`; `expect` guards against the trace drifting from the copy. */
+const FIG_TODAY = `<svg class="fig" viewBox="0 0 460 170" role="img" aria-label="Two tasks that each find A to D separately">
+  <path d="M40 42H360" stroke="var(--l1)" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <path d="M40 122H360" stroke="var(--l2)" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <g fill="var(--sheet)" stroke="var(--ink)" stroke-width="3">
+    <circle cx="40" cy="42" r="10"/><circle cx="120" cy="42" r="10"/><circle cx="200" cy="42" r="10"/><circle cx="280" cy="42" r="10"/><circle cx="360" cy="42" r="10"/>
+    <circle cx="40" cy="122" r="10" stroke="var(--bad)" stroke-dasharray="4 3"/><circle cx="120" cy="122" r="10" stroke="var(--bad)" stroke-dasharray="4 3"/><circle cx="200" cy="122" r="10" stroke="var(--bad)" stroke-dasharray="4 3"/><circle cx="280" cy="122" r="10" stroke="var(--bad)" stroke-dasharray="4 3"/><circle cx="360" cy="122" r="10"/>
+  </g>
+  <g font-size="13" font-weight="800" fill="var(--ink)" text-anchor="middle">
+    <text x="40" y="20">A</text><text x="120" y="20">B</text><text x="200" y="20">C</text><text x="280" y="20">D</text><text x="360" y="20">E</text>
+    <text x="40" y="100">A</text><text x="120" y="100">B</text><text x="200" y="100">C</text><text x="280" y="100">D</text><text x="360" y="100">F</text>
+  </g>
+  <text x="40" y="158" font-size="12.5" fill="var(--bad)" font-weight="800">Task 2 finds A to D again, on the same assets</text>
+</svg>`;
+const FIG_ONE = `<svg class="fig" viewBox="0 0 460 170" role="img" aria-label="One shared trunk A to D that splits to E and F">
+  <path d="M40 82H280" stroke="var(--l1)" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <path d="M40 90H280" stroke="var(--l2)" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <path d="M280 82H310L352 40H390" stroke="var(--l1)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M280 90H310L352 132H390" stroke="var(--l2)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <g fill="var(--sheet)" stroke="var(--ink)" stroke-width="3">
+    <circle cx="40" cy="86" r="13"/><circle cx="120" cy="86" r="13"/><circle cx="200" cy="86" r="13"/><circle cx="280" cy="86" r="13"/><circle cx="390" cy="40" r="10"/><circle cx="390" cy="132" r="10"/>
+  </g>
+  <g font-size="13" font-weight="800" fill="var(--ink)" text-anchor="middle">
+    <text x="40" y="58">A</text><text x="120" y="58">B</text><text x="200" y="58">C</text><text x="280" y="58">D</text><text x="418" y="45">E</text><text x="418" y="137">F</text>
+  </g>
+  <text x="40" y="158" font-size="12.5" fill="var(--ink)" font-weight="800">Both passengers share A to D, then split</text>
+</svg>`;
+
+const CHAPTERS = [
+  { t:'The problem', beats:[
+    { scn:'fanout', at:0, expect:'SETUP', view:'trunk', h:'One trunk, two destinations',
+      p:['Task 1 needs assets A, B, C, D, then E. Task 2 needs the same A, B, C, D, then F instead of E.',
+         'Everything up to D should be the <b>same assets</b> for both tasks. Only the last stop differs. That shape is called a <b>fan-out</b>: one shared trunk, then the route splits.'] },
+    { scn:'fanout', at:0, expect:'SETUP', view:'twice', h:'Two tasks means doing the trunk twice', fig:FIG_TODAY,
+      p:['Today, task 2 has to find A to D all over again and land on exactly the assets task 1 picked, then diverge at the right moment.',
+         'The rule “task 2 must re-use A, B, C, D” is enforced by making task 2 <b>follow</b> task 1. That makes the two tasks depend on each other’s order, even though they are meant to be independent requests.'] },
+    { scn:'fanin', at:0, expect:'SETUP', view:'joinsame', h:'Fan-in is the mirror image',
+      p:['Now the tasks start in different places. Task 1 starts at A, task 2 starts at A′, and both must end on the <b>same C</b> before carrying on to D.',
+         'If task 1 runs first and takes the closest C it finds, task 2 may have no way in. Task 1 would then have to be re-run, and nothing tells it why.'] },
+  ]},
+  { t:'The idea: one bus, several passengers', beats:[
+    { scn:'fanout', at:0, expect:'SETUP', view:'stops', h:'Each slot is a stop with platforms',
+      p:['Each capsule is a <b>stop</b>: one slot in your request, like “type C”. Each circle inside it is a <b>platform</b>: an asset that could fill that slot.',
+         'A passenger boards at the first stop and rides through exactly one platform at every stop on the way.'] },
+    { scn:'fanout', at:0, expect:'SETUP', view:'links', h:'Grey lines show which platforms connect',
+      p:['A thin grey line joins two platforms that are compatible. These are the links your Coupler already walks.',
+         'A passenger can only go from A1 to B1 if a grey line joins them. There is no line from A1 to B2, so that move is not allowed.'] },
+    { scn:'fanout', at:12, expect:'DONE', view:'rule', h:'The one rule: a stop has one platform', fig:FIG_ONE,
+      p:['Two passengers who pass through the same stop use the <b>same platform</b>. That is your rule “must re-use A, B, C, D”, built into the request instead of one task chasing another.',
+         'The coloured lines will show each task’s ride. Where they share a stop, they run side by side.'] },
+    { scn:'fanout', at:12, expect:'DONE', view:'answer', h:'An answer is one platform per stop',
+      p:['The solver’s whole job: choose <b>one platform for every stop</b> so that every pair of neighbouring stops is joined by a grey line.',
+         'In Trackplan words: a stop is a slot in the request, a platform is an asset that passes the prefilter and inspectors, a grey line is a link the Coupler can walk, and a passenger is a task.',
+         'The rest of this page is about how to find that choice without trying everything.'] },
+  ]},
+  { t:'Fan-out, step by step', beats:[
+    { scn:'fanout', at:0, expect:'SETUP', view:'firstfit', h:'Why not just run task 1 first?',
+      p:['Task 1 alone would take the first thing that works at each stop: A1, B1, C1, D1, E1.',
+         'Then task 2 arrives and needs F. Only D2 connects to F1, and D1 is already taken. The only fix is to undo D, C, B and A and start over, and the first run had no way of knowing that was coming.',
+         'The idea below looks at <b>both</b> ends before committing to anything.'] },
+    { scn:'fanout', at:1, expect:'SHAPE', view:'count', h:'First, look for a loop',
+      p:['Ignore the arrows and check whether any route forks and comes back together. Here nothing does: it is a <b>tree</b>.',
+         'Quick test: a connected route with N stops and N−1 links has no loop. This one has 6 stops and 5 links.',
+         'That matters because a tree can be solved <b>without guessing</b>.'] },
+    { scn:'fanout', at:2, expect:'PLAN', view:'order', h:'Pick a base and work inward',
+      p:['Take the busiest stop, D, as the base. Work from the far ends toward it.',
+         'The ends (A, E and F) have nothing beyond them to check, so they come first and cost nothing. The order is A, B, C toward D from the left, and E, F toward D from the right.'] },
+    { scn:'fanout', at:5, expect:'PRUNE', h:'Each stop drops platforms its neighbours can’t reach',
+      p:['Moving inward, a stop keeps only platforms that connect to something still open at <b>every</b> stop beyond it.',
+         'B and C keep both platforms: each connects onward. At D, F has a single platform, F1, and only D2 connects to it. So <code>D1</code> is dropped, even though D1 connects fine to E1.'],
+      why:'D is where E and F are both satisfied at once. The split is handled by the stop itself, not by two tasks agreeing afterwards.' },
+    { scn:'fanout', at:6, expect:'PICK', h:'Now commit, starting at the base',
+      p:['D has one platform left, <b>D2</b>, so that is chosen. There is no guess to make.',
+         'If D had two survivors, either would work: the inward pass has already proved that everything beyond D can be completed from any survivor.'] },
+    { scn:'fanout', at:12, expect:'DONE', h:'The rest is forced',
+      p:['C must connect to D2, so C2. Then B2 and A2. E2 and F1 hang off D2.',
+         'The inward pass promised that each of these exists, so this pass <b>cannot get stuck</b>. That is the reason a tree needs no backtracking.',
+         'Task 1 rides A2 B2 C2 D2 E2. Task 2 rides A2 B2 C2 D2 F1. One pass, no retries, and they share A to D by construction.'] },
+  ]},
+  { t:'Fan-in, step by step', beats:[
+    { scn:'fanin', at:1, expect:'SHAPE', view:'count', h:'Different starts still make a tree',
+      p:['Task 1 starts at A and task 2 starts at A′. Neither route forks from the other, so there is no loop: 6 stops, 5 links.',
+         'The join, C, is just a stop with three neighbours: B, B′ and D. A tree can have as many branches meeting as you like.'] },
+    { scn:'fanin', at:2, expect:'PLAN', view:'order', h:'Make the join the base',
+      p:['C has the most neighbours, so it is the base. We work inward from the three ends: A, A′ and D.'] },
+    { scn:'fanin', at:3, expect:'PRUNE', h:'Each branch checks itself first',
+      p:['B′ looks back toward A′ and keeps B3 and B4, since both have a partner. B does the same toward A.',
+         'Nothing is dropped yet. The interesting check is at the join.'] },
+    { scn:'fanin', at:5, expect:'PRUNE', h:'At the join, take the overlap',
+      p:['C asks each branch which C platforms it can reach: from B it is <span class="set">{C1, C2}</span>, from B′ it is <span class="set">{C2}</span>, and from D it is <span class="set">{C1, C2}</span>.',
+         'A single C must satisfy all three, so keep only the overlap: <span class="set">{C2}</span>. <code>C1</code> is dropped because task 2’s branch cannot reach it.'],
+      why:'A task that ran first and took the closest C would have picked C1 and stranded task 2. The overlap sees both sides at once.' },
+    { scn:'fanin', at:12, expect:'DONE', h:'Hand the answer back down both branches',
+      p:['C2 is chosen. B must connect to C2, so B2, then A2. B′ has B3 and B4 left and takes the first, B3, then A3.',
+         'Task 1 starts at A2 and task 2 starts at A3, different starts, and they meet at C2 and share D1.',
+         'Neither task went first, and nothing was retried.'] },
+  ]},
+  { t:'Split and rejoin', beats:[
+    { scn:'diamond', at:0, expect:'SETUP', h:'One start, two branches, one rejoin',
+      p:['This is the fan-out and the fan-in combined. Both tasks start at A, task 2 detours through <b>B′</b> instead of B, and they meet again at C.',
+         'A, C and D are shared. The two branches must agree on <b>one platform at C</b>, and both must also begin from the <b>one platform at A</b>.'] },
+    { scn:'diamond', at:1, expect:'SHAPE', view:'loop', h:'Why this one is harder',
+      p:['The route now has a <b>loop</b>: A leads to B and to B′, and both lead to C. 5 stops but 5 links, one too many for a tree.',
+         'In a tree, each side is independent once the base is fixed. In a loop, a choice at A affects both branches, and both branches affect C, so the effect goes around the circle and comes back.'] },
+    { scn:'diamond', at:2, expect:'PRUNE', view:'local', h:'Checking links one at a time finds nothing wrong',
+      p:['Every platform has a connecting neighbour on each side, so nothing is dropped.',
+         'But a link-by-link check cannot see that two branches have to end on the same C. This is the trap: everything looks fine and the problem is still there.'] },
+    { scn:'diamond', at:3, expect:'SHAPE', view:'pin', h:'So pin one stop and see what happens',
+      p:['Pin one stop on the loop. Here that is A, which has two platforms. With A fixed, the loop is cut and what remains is a tree again.',
+         'Then try A’s platforms one at a time, and solve the rest with the same inward-then-outward pass as before.'],
+      why:'Formal name: cutset. Any stop on the loop works. The one with the fewest platforms is cheapest, because that is how many times you may have to solve the tree.' },
+    { scn:'diamond', at:5, expect:'PRUNE', h:'Try A1',
+      p:['A1 only connects to B1 and B3. So B is down to <span class="set">{B1}</span> and B′ is down to <span class="set">{B3}</span>.'] },
+    { scn:'diamond', at:7, expect:'FAIL', h:'The join has no platform both branches accept',
+      p:['B1 reaches only C1. B3 reaches only C2. C needs <b>one</b> platform for both passengers, so it needs the overlap of <span class="set">{C1}</span> and <span class="set">{C2}</span>.',
+         'The overlap is empty. Dead end, so A1 is out.'],
+      why:'This is the check task 2 could not make without task 1’s answer. Here it falls out of the overlap.' },
+    { scn:'diamond', at:11, expect:'PRUNE', h:'Try A2: the overlap is {C2}',
+      p:['A2 leaves B2 and B4. B2 reaches only C2. B4 reaches C1 or C2. The overlap is <span class="set">{C2}</span>, so <code>C1</code> is dropped.'] },
+    { scn:'diamond', at:16, expect:'DONE', h:'Read out the answer',
+      p:['C2 is chosen, then B2, B4 and D1.',
+         'Both passengers ride A2, split to B2 and B4, meet again at C2 and share D1.',
+         'Only A was ever tried twice. Nothing else was retried. In general the work is at most one tree solve per platform of the pinned stop.'] },
+  ]},
+  { t:'When there is no answer', beats:[
+    { scn:'unsat', at:2, expect:'PRUNE', view:'local', h:'Same trip, but the branches never agree',
+      p:['Here B1 and B2 lead to C1 and C2, while B3 and B4 lead to C2 and C1, the other way round.',
+         'Every platform still has a neighbour, so the link-by-link check passes again. The only way to learn the truth is to try.'] },
+    { scn:'unsat', at:7, expect:'FAIL', h:'A1 fails at the join',
+      p:['With A1, one branch needs C1 and the other needs C2. No overlap.'] },
+    { scn:'unsat', at:11, expect:'FAIL', h:'A2 fails the same way',
+      p:['With A2, the branches need C2 and C1. No overlap either.'] },
+    { scn:'unsat', at:12, expect:'UNSAT', h:'Report the stop that ran dry',
+      p:['Every platform of A has been tried, and both failed at <b>C</b>.',
+         'So the error can say “the branches cannot agree on a C”, not just “task 2 failed”. That is the line you want in the resolve trace.',
+         'The proof is also complete: because the loop was cut at A and A has no other platform, nothing was skipped.'] },
+  ]},
+];
+
+</script>
+
+<script id="ui">
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const ROWH = 54, CAPW = 68;
+
+const LAYOUT = {
+  fanout:{ A:[95,260], B:[275,260], C:[455,260], D:[635,260], E:[890,140], F:[890,380] },
+  fanin: { A:[95,130], B:[335,130], Ap:[95,390], Bp:[335,390], C:[610,260], D:[880,260] },
+  diamond:{ A:[95,260], B:[335,130], Bp:[335,390], C:[610,260], D:[880,260] },
+  unsat: { A:[95,260], B:[335,130], Bp:[335,390], C:[610,260], D:[880,260] },
+};
+const LINES = {
+  fanout:[{n:'Task 1',c:'--l1',s:['A','B','C','D','E']},{n:'Task 2',c:'--l2',s:['A','B','C','D','F']}],
+  fanin: [{n:'Task 1',c:'--l1',s:['A','B','C','D']},{n:'Task 2',c:'--l2',s:['Ap','Bp','C','D']}],
+  diamond:[{n:'Task 1',c:'--l1',s:['A','B','C','D']},{n:'Task 2',c:'--l2',s:['A','Bp','C','D']}],
+  unsat: [{n:'Task 1',c:'--l1',s:['A','B','C','D']},{n:'Task 2',c:'--l2',s:['A','Bp','C','D']}],
+};
+const tone = k => ({FAIL:'bad',UNSAT:'bad',PICK:'good',DONE:'good'}[k]||'');
+const scById = id => SCEN.find(s=>s.id===id);
+const NONE = new Set();
+const RUNS = Object.fromEntries(SCEN.map(s=>[s.id, solve(s, NONE)]));
+
+CHAPTERS.forEach(ch=>ch.beats.forEach(b=>{
+  const got = RUNS[b.scn].steps[b.at];
+  if(!got || got.kind!==b.expect) console.warn('Beat drifted from solver trace:', b.h, 'expected', b.expect, 'got', got && got.kind);
+}));
+
+function route(p, q, o=0){
+  const x1=p.x, y1=p.y+o, x2=q.x, y2=q.y+o, dx=x2-x1, dy=y2-y1, d=Math.abs(dy);
+  if(d<1) return `M${x1} ${y1}H${x2}`;
+  if(dx<=d+20) return `M${x1} ${y1}L${x2} ${y2}`;
+  const s=(dx-d)/2;
+  return `M${x1} ${y1}H${x1+s}L${x2-s} ${y2}H${x2}`;
+}
+
+/* Annotation helpers for the per-step views */
+const T=(x,y,t,o={})=>`<text class="ann" x="${x}" y="${y}" text-anchor="${o.a||'middle'}" font-size="${o.s||16}" font-weight="800" fill="${o.c||'var(--ink)'}">${esc(t)}</text>`;
+const PA=(d,o={})=>`<path d="${d}" fill="none" stroke="${o.c||'var(--ink)'}" stroke-width="${o.w||2.5}" stroke-linecap="round" stroke-linejoin="round"${o.dash?` stroke-dasharray="${o.dash}"`:''}/>`;
+const AR=(x1,y1,x2,y2,c='var(--ink)')=>{const a=Math.atan2(y2-y1,x2-x1),k=9;return PA(`M${x1} ${y1}L${x2} ${y2}`,{c})+PA(`M${x2-k*Math.cos(a-.5)} ${y2-k*Math.sin(a-.5)}L${x2} ${y2}L${x2-k*Math.cos(a+.5)} ${y2-k*Math.sin(a+.5)}`,{c});};
+const XX=(x,y)=>PA(`M${x-8} ${y-8}L${x+8} ${y+8}M${x+8} ${y-8}L${x-8} ${y+8}`,{c:'var(--bad)',w:3.5});
+const countText=c=>{const n=c.sc.slots.length,m=c.sc.edges.length;return T(500,505,`${n} stops, ${m} links: `+(m===n-1?'a tree, so no loop':'one link too many, so there is a loop'),{s:17});};
+
+const openAll=sc=>Object.fromEntries(sc.slots.map(x=>[x.id,[...x.pool]]));
+
+/* Each view changes how a snapshot is drawn so the map shows what the step's text says. */
+const VIEWS = {
+  trunk:{ ann:c=>PA('M95 150V140H635V150')+T(365,122,'one shared trunk: the same assets for both tasks')+T(890,262,'only the ends differ',{c:'var(--muted)',s:15}) },
+  twice:{ st:s=>({...s,kind:'PICK',chosen:{A:'A2',B:'B2',C:'C2',D:'D2',E:'E2'}}),
+          ann:()=>PA('M95 345H635',{c:'var(--bad)',dash:'2 8',w:6})+[95,275,455,635].map(x=>`<circle cx="${x}" cy="345" r="8" fill="var(--sheet)" stroke="var(--bad)" stroke-width="2.5" stroke-dasharray="3 3"/>`).join('')+T(365,382,'task 2 finds A to D all over again, then has to match task 1',{c:'var(--bad)',s:15}) },
+  joinsame:{ glow:['C'], ann:c=>T(610,138,'both tasks must land on the same C')+AR(610,150,610,172) },
+  stops:{ glow:'all', ann:()=>T(275,120,'a stop: one slot in the request')+AR(275,130,275,168)+T(275,386,'a platform: one candidate asset')+AR(275,362,275,310) },
+  links:{ tracks:'strong', ann:c=>T(185,150,'a grey line means “can follow”')+PA(`M115 ${c.pos.A1.y}L255 ${c.pos.B2.y}`,{c:'var(--bad)',dash:'4 5',w:2.5})+XX(185,(c.pos.A1.y+c.pos.B2.y)/2)+T(40,372,'no line from A1 to B2, so that move is not allowed',{a:'start',s:15}) },
+  rule:{ st:(s,sc)=>({...s,dom:openAll(sc)}), ann:()=>PA('M95 345V355H635V345')+T(365,382,'both passengers use the same platform at each of these stops',{s:15})+T(890,262,'only the ends differ',{c:'var(--muted)',s:15}) },
+  answer:{ noLines:true, st:(s,sc)=>({...s,dom:openAll(sc),hot:sc.edges.map(([a,b])=>[s.chosen[a],s.chosen[b]])}),
+           ann:()=>T(450,386,'one platform per stop, and every neighbouring pair joined by a line',{s:16}) },
+  firstfit:{ st:s=>({...s,kind:'PICK',chosen:{A:'A1',B:'B1',C:'C1',D:'D1',E:'E1'}}),
+             ann:c=>PA(route(c.pos.D1,c.pos.F1),{c:'var(--bad)',dash:'4 6',w:3})+XX(762,306)+T(700,440,'task 2 needs F1, and there is no line from D1',{c:'var(--bad)',s:15}) },
+  count:{ ghost:'strong', ann:countText },
+  loop:{ ghost:'strong', glow:['A','B','Bp','C'], ann:countText },
+  order:{ glow:c=>[c.root], ann:c=>{
+    const adj={}; c.sc.slots.forEach(s=>adj[s.id]=[]); c.sc.edges.forEach(([a,b])=>{adj[a].push(b);adj[b].push(a);});
+    const dist={[c.root]:0}, q=[c.root]; while(q.length){const v=q.shift(); adj[v].forEach(n=>{ if(!(n in dist)){dist[n]=dist[v]+1;q.push(n);} });}
+    const mx=Math.max(...Object.values(dist)); let h='';
+    c.sc.slots.forEach(s=>{ const [cx,cy]=c.L[s.id], top=cy-(s.pool.length*ROWH+10)/2, x=cx+CAPW/2;
+      h+=`<circle cx="${x}" cy="${top}" r="14" fill="var(--ink)"/><text x="${x}" y="${top+5}" text-anchor="middle" font-size="15" font-weight="900" fill="var(--on-ink)">${mx-dist[s.id]+1}</text>`; });
+    return h+T(500,505,'numbers show the round each stop is checked in: ends first, the base last'); } },
+  local:{ tracks:'strong', ann:()=>T(610,505,'every platform has a line on both sides, so nothing is dropped') },
+  pin:{ glow:['A'], ann:c=>T(c.L.A[0],128,'pin A')+AR(c.L.A[0],140,c.L.A[0],172)+T(610,505,'with A fixed the loop is cut, and what is left is a tree') },
+};
+
+/* Draws one snapshot onto an svg. animate=true draws only the segments that are new since the last draw. */
+function drawMap(svg, scId, st0, off, animate, onToggle, view){
+  const sc = scById(scId), L = LAYOUT[scId], lines = LINES[scId];
+  view = view || {};
+  const st = view.st ? view.st(st0, sc) : st0;
+  const slot = Object.fromEntries(sc.slots.map(s=>[s.id,s]));
+  const slotOf = {}; sc.slots.forEach(s=>s.pool.forEach(a=>slotOf[a]=s.id));
+  const pos = {};
+  sc.slots.forEach(s=>s.pool.forEach((a,i)=>{ pos[a] = {x:L[s.id][0], y:L[s.id][1] + (i-(s.pool.length-1)/2)*ROWH}; }));
+  const ctx = {sc, L, pos, scId, root:(RUNS[scId].shape.root||'').split(', ')[0]};
+  const glowSet = new Set([...st.focus, ...(view.glow==='all' ? sc.slots.map(s=>s.id) : typeof view.glow==='function' ? view.glow(ctx) : (view.glow||[]))]);
+  const lab = id => slot[id].label||id;
+  const alive = (s,a) => st.dom[s].includes(a);
+  const kindOf = a => {
+    const s = slotOf[a];
+    if(off.has(a)) return 'off';
+    if(st.chosen[s]===a && (st.fixed[s]!==a || st.kind==='DONE')) return 'chosen';
+    if(st.fixed[s]===a) return 'fixed';
+    if(alive(s,a)) return 'alive';
+    if((st.shelved[s]||[]).includes(a)) return 'shelved';
+    return 'pruned';
+  };
+  let h = '';
+  sc.edges.forEach(([a,b])=>{ h += `<path class="ghost ${view.ghost||''}" d="${route({x:L[a][0],y:L[a][1]},{x:L[b][0],y:L[b][1]})}"/>`; });
+  sc.edges.forEach(([a,b,pairs])=>pairs.forEach(([x,y])=>{
+    if(off.has(x)||off.has(y)) return;
+    const hot = st.hot.some(([u,v])=>(u===x&&v===y)||(u===y&&v===x));
+    const dim = !(alive(a,x)||st.chosen[a]===x) || !(alive(b,y)||st.chosen[b]===y);
+    h += `<line class="track ${hot?'hot':dim?'dim':view.tracks||''}" x1="${pos[x].x}" y1="${pos[x].y}" x2="${pos[y].x}" y2="${pos[y].y}"/>`;
+  }));
+  sc.slots.forEach(s=>{
+    const [cx,cy] = L[s.id], n = s.pool.length, ht = n*ROWH+10, top = cy-ht/2;
+    if(glowSet.has(s.id)) h += `<rect class="glow" x="${cx-CAPW/2-9}" y="${top-9}" width="${CAPW+18}" height="${ht+18}" rx="${CAPW/2+9}"/>`;
+    h += `<rect class="cap" x="${cx-CAPW/2}" y="${top}" width="${CAPW}" height="${ht}" rx="${CAPW/2}"/>`;
+    h += `<text class="stopName" x="${cx}" y="${top-16}">${esc(lab(s.id))}</text>`;
+    if(s.sub) h += `<text class="stopSub" x="${cx}" y="${top+ht+24}">${esc(s.sub)}</text>`;
+  });
+  const prev = svg._segs || new Set(), segs = new Set();
+  if(!view.noLines) lines.forEach((ln,li)=>{
+    for(let i=0;i<ln.s.length-1;i++){
+      const a=ln.s[i], b=ln.s[i+1];
+      if(!st.chosen[a]||!st.chosen[b]) continue;
+      const shared = lines.some((o,oi)=>oi!==li && o.s.some((v,j)=>v===a && o.s[j+1]===b));
+      const key = li+':'+a+'>'+b+':'+st.chosen[a]+st.chosen[b];
+      segs.add(key);
+      h += `<path class="seg ${animate&&!prev.has(key)?'draw':''}" pathLength="1" stroke="var(${ln.c})" d="${route(pos[st.chosen[a]],pos[st.chosen[b]],shared?(li===0?-5:5):0)}"/>`;
+    }
+  });
+  svg._segs = segs;
+  sc.slots.forEach(s=>s.pool.forEach(a=>{
+    const p = pos[a], k = kindOf(a);
+    h += onToggle
+      ? `<g class="pf live ${k}" data-a="${a}" tabindex="0" role="button" aria-label="Platform ${a}, ${k}. Press to toggle service"><title>${a}: click to take out of service</title><circle cx="${p.x}" cy="${p.y}" r="20"/><text x="${p.x}" y="${p.y+5}">${a}</text></g>`
+      : `<g class="pf ${k}"><circle cx="${p.x}" cy="${p.y}" r="20"/><text x="${p.x}" y="${p.y+5}">${a}</text></g>`;
+  }));
+  if(view.ann) h += view.ann(ctx);
+  h += `<g class="key">`;
+  lines.forEach((ln,i)=>{ h += `<path d="M470 ${32+i*30}H514" stroke="var(${ln.c})" stroke-width="8" stroke-linecap="round"/><text x="526" y="${38+i*30}">${ln.n}</text>`; });
+  h += `</g>`;
+  svg.innerHTML = h;
+  if(onToggle) svg.querySelectorAll('.pf').forEach(el=>{
+    const flip = () => onToggle(el.dataset.a);
+    el.addEventListener('click', flip);
+    el.addEventListener('keydown', e => { if(e.key==='Enter'||e.key===' '){ e.preventDefault(); flip(); } });
+  });
+}
+
+/* ---------- theme ---------- */
+$('themeBtn').addEventListener('click', () => {
+  const c = document.documentElement.getAttribute('data-theme');
+  const m = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', (c==='dark'||(!c&&m==='dark')) ? 'light' : 'dark');
+});
+
+/* ---------- story ---------- */
+const flat = [];
+$('beats').innerHTML = CHAPTERS.map((ch,ci)=>`
+  <section class="chapter"><h2><span class="cn">${ci+1}</span>${esc(ch.t)}</h2>
+  ${ch.beats.map((b,bi)=>{ const n = flat.push({...b, ci, bi}) - 1;
+    return `<article class="beat" data-n="${n}"><h3>${esc(b.h)}</h3>${b.p.map(t=>`<p>${t}</p>`).join('')}${b.why?`<p class="why">${b.why}</p>`:''}${b.fig||''}</article>`; }).join('')}
+  </section>`).join('');
+const beatEls = [...document.querySelectorAll('.beat')];
+let shownBeat = -1, shownScn = null;
+
+function showBeat(n){
+  if(n===shownBeat) return;
+  const b = flat[n], ch = CHAPTERS[b.ci];
+  const sameScn = shownScn===b.scn;
+  if(!sameScn) $('storyMap')._segs = new Set();
+  drawMap($('storyMap'), b.scn, RUNS[b.scn].steps[b.at], NONE, sameScn && n>shownBeat, null, VIEWS[b.view]);
+  shownBeat = n; shownScn = b.scn;
+  $('stageTitle').textContent = `${b.ci+1} · ${ch.t}`;
+  $('stageDots').innerHTML = ch.beats.map((_,i)=>`<i class="${i<b.bi?'d':i===b.bi?'c':''}"></i>`).join('');
+  beatEls.forEach((el,i)=>el.classList.toggle('on', i===n));
+}
+let ticking = false;
+function onScroll(){
+  if(ticking) return; ticking = true;
+  requestAnimationFrame(()=>{
+    ticking = false;
+    const mobile = matchMedia('(max-width:900px)').matches;
+    const line = mobile ? innerHeight*0.62 : innerHeight*0.45;
+    let best = 0, bd = Infinity;
+    beatEls.forEach((el,i)=>{ const r = el.getBoundingClientRect(); const d = Math.abs((r.top + Math.min(r.height, innerHeight*.5)/2) - line); if(d<bd){ bd=d; best=i; } });
+    showBeat(best);
+  });
+}
+addEventListener('scroll', onScroll, {passive:true});
+addEventListener('resize', onScroll);
+beatEls.forEach((el,i)=>el.addEventListener('click',()=>showBeat(i)));
+showBeat(0);
+
+/* ---------- playground ---------- */
+let cur = 0, idx = 0, RUN = null, timer = null;
+const offline = new Set();
+
+function buildRoutes(){
+  $('routes').innerHTML = SCEN.map((s,i)=>`
+    <button type="button" class="route ${s.outcome}" data-i="${i}" aria-pressed="${i===cur}">
+      <span class="num">${i+1}</span>
+      <span class="nm">${esc(s.label.replace(/^\d · /,''))}<small>${s.outcome==='sat'?'has an answer':'no answer'}</small></span>
+    </button>`).join('');
+  $('routes').querySelectorAll('.route').forEach(b=>b.addEventListener('click',()=>{ cur=+b.dataset.i; offline.clear(); rerun(); buildRoutes(); }));
+  $('blurb').textContent = SCEN[cur].desc;
+}
+function rerun(){
+  stop();
+  RUN = solve(SCEN[cur], offline);
+  idx = 0; $('playMap')._segs = new Set();
+  $('scrub').max = RUN.steps.length-1;
+  renderPlay(false);
+}
+function toggleOff(a){ offline.has(a) ? offline.delete(a) : offline.add(a); rerun(); }
+
+function renderPlay(animate){
+  const sc = SCEN[cur], st = RUN.steps[idx], slot = Object.fromEntries(sc.slots.map(s=>[s.id,s]));
+  const lab = id => slot[id].label||id;
+  drawMap($('playMap'), sc.id, st, offline, animate, toggleOff);
+  const kind = $('kind'); kind.textContent = st.kind; kind.className = tone(st.kind);
+  $('stepTitle').textContent = st.title;
+  $('stepDetail').textContent = st.detail;
+  $('count').textContent = `${idx+1} / ${RUN.steps.length}`;
+  $('scrub').value = idx;
+  $('bFirst').disabled = $('bPrev').disabled = idx===0;
+  $('bNext').disabled = $('bLast').disabled = idx===RUN.steps.length-1;
+  const sh = RUN.shape;
+  const outcome = sh.outcome==='SAT' ? '<span class="res-sat">It has an answer.</span>'
+    : `<span class="res-unsat">No answer${sh.failedSlot?`: ${esc(lab(sh.failedSlot))} runs out of platforms`:''}.</span>`;
+  $('shapeLine').innerHTML = sh.cyclic
+    ? `<b>${sh.slots} stops, ${sh.edges} links, and a loop.</b> It pins <b>${esc(lab(sh.cutset))}</b> and tries each of its platforms, solving the rest as a tree. ${outcome}`
+    : `<b>${sh.slots} stops, ${sh.edges} links, no loop.</b> It is a tree, so it solves in one pass with no backtracking. ${outcome}`;
+  $('dom').innerHTML = sc.slots.map(s=>{
+    const chip = a => `<span class="plat ${st.chosen[s.id]===a?'chosen':st.fixed[s.id]===a?'fixed':''}">${a}</span>`;
+    const open = st.dom[s.id].length ? st.dom[s.id].map(chip).join('') : '<span class="plat none">none</span>';
+    const got = st.chosen[s.id] ? `<span class="plat chosen">${st.chosen[s.id]}</span>` : '<span class="dash">—</span>';
+    return `<tr class="${st.focus.includes(s.id)?'focus':''}"><td class="st">${esc(lab(s.id))}</td><td>${open}</td><td>${got}</td></tr>`;
+  }).join('');
+  $('log').innerHTML = RUN.steps.map((s,i)=>`<button type="button" class="li ${i===idx?'here':''}" data-i="${i}"><span class="n">${i+1}</span><span class="k ${tone(s.kind)}"></span><span>${esc(s.title)}</span></button>`).join('');
+  $('log').querySelectorAll('.li').forEach(b=>b.addEventListener('click',()=>go(+b.dataset.i)));
+  const here = $('log').querySelector('.here'); if(here) here.scrollTop, here.scrollIntoView({block:'nearest'});
+}
+function stop(){ if(timer){ clearInterval(timer); timer=null; $('bPlay').textContent='▶ Play'; } }
+/* only a single step forward animates the newly drawn segment */
+function go(i){ stop(); const n = Math.max(0, Math.min(RUN.steps.length-1, i)); const fwd = n===idx+1; idx=n; renderPlay(fwd); }
+$('bFirst').onclick = () => go(0);
+$('bPrev').onclick  = () => go(idx-1);
+$('bNext').onclick  = () => go(idx+1);
+$('bLast').onclick  = () => go(RUN.steps.length-1);
+$('scrub').oninput  = e => go(+e.target.value);
+$('resetOff').onclick = () => { offline.clear(); rerun(); };
+$('bPlay').onclick = () => {
+  if(timer){ stop(); return; }
+  if(idx>=RUN.steps.length-1){ idx=0; $('playMap')._segs = new Set(); }
+  $('bPlay').textContent = '⏸ Pause';
+  timer = setInterval(()=>{ if(idx>=RUN.steps.length-1){ stop(); return; } idx++; renderPlay(true); }, 1600);
+  renderPlay(false);
+};
+addEventListener('keydown', e => {
+  if(e.target.tagName==='INPUT') return;
+  const r = $('try').getBoundingClientRect();
+  if(r.top > innerHeight*0.5 || r.bottom < innerHeight*0.3) return;
+  if(e.key==='ArrowRight') go(idx+1); else if(e.key==='ArrowLeft') go(idx-1);
+});
+
+buildRoutes(); rerun();
+</script>
+</body>
+</html>

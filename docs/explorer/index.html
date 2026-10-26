@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Machine map</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:ital,wght@0,400;0,500;1,400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="stats" id="stats"></div>
+      <div class="actions">
+        <button type="button" id="btn-resume"><span class="btn-full">▶ Resume the flow</span><span class="btn-short">Flow</span></button>
+        <button type="button" id="btn-step"><span class="btn-full">Trace one step</span><span class="btn-short">Step</span></button>
+        <button type="button" id="btn-reset"><span class="btn-full">Reset view</span><span class="btn-short">Reset</span></button>
+      </div>
+    </header>
+
+    <div class="main">
+      <nav class="side" id="side" aria-label="System parts"></nav>
+
+      <div class="stage" id="stage">
+        <div class="zoom">
+          <button type="button" id="btn-zoom-in" aria-label="Zoom in">+</button>
+          <button type="button" id="btn-zoom-out" aria-label="Zoom out">−</button>
+        </div>
+        <div class="paper-tray" id="paper-tray" aria-label="Paper color">
+          <button type="button" data-paper="light" style="background:#efe6c4" title="Light khaki"></button>
+          <button type="button" data-paper="khaki" style="background:#c8b56a" title="Khaki"></button>
+          <button type="button" data-paper="bone" style="background:#f4f0e2" title="Bone"></button>
+          <button type="button" data-paper="linen" style="background:#e7e0d2" title="Linen"></button>
+          <label title="Custom paper">
+            <input type="color" id="paper-custom" value="#efe6c4" aria-label="Custom paper color" />
+          </label>
+        </div>
+        <div class="crumb" id="crumb"></div>
+        <svg id="stage-svg" xmlns="http://www.w3.org/2000/svg">
+          <g id="iso-world"></g>
+        </svg>
+        <div class="flow-banner" id="flow-banner" hidden></div>
+      </div>
+
+      <aside class="essay">
+        <div class="tabs">
+          <button type="button" data-tab="does" class="is-on">What it does</button>
+          <button type="button" data-tab="built">How it’s built</button>
+        </div>
+        <div class="essay-body" id="essay-body"></div>
+      </aside>
+    </div>
+
+    <footer class="foot">
+      <span><b>→</b> go inside</span>
+      <span><b>←</b> come back out</span>
+      <span><b>↓ ↑</b> move</span>
+      <span>hover to read</span>
+      <span>drag to pan</span>
+      <span>scroll to zoom</span>
+      <span><b>space</b> trace</span>
+      <span><b>f</b> flow</span>
+    </footer>
+  </div>
+
+  <script src="system.js"></script>
+  <script src="iso.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

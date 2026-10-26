@@ -467,6 +467,7 @@ Last StationType is often a **terminal**: typically **no output track** needed.
 #### Oracle++ (DECIDED — topology insight beyond “next type only”)
 
 **Name:** **Oracle++** (supersedes the weaker “Oracle = only hop-count to next type” story).  
+**Naming reconsidered:** candidates for a clearer name were **DistanceOracle** (it returns numeric distances, not just reachability — the most literal fit), **ReachabilityIndex**, and **TopoOracle**. Name kept as **Oracle++** per the frozen Network vocabulary decision below (§ line “Oracle++ / ExpandKey / PlanSegment — keep”); revisit only if that freeze is reopened.  
 **Graph:** Stations + Tracks + Links (in vs out from type track lists). Topology only — **not** tasking, request, or Inspector.
 
 **Loop rules (same as Coupler):** hop_key uniqueness on a path, max hops **H**, max visits per station **V**, online Links + OPEN Stations only. Loopback OK; infinite spin not.

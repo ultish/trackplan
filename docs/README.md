@@ -10,6 +10,7 @@
 | **1b** | **[ENTITY_DIAGRAMS.md](./ENTITY_DIAGRAMS.md)** | Mermaid class / relationship diagrams for the Station model |
 | **2** | **[SPEC.md](./SPEC.md)** | Broader handoff; some sections still older Class/Car wording |
 | **3** | **[booking-assembler-design.html](./booking-assembler-design.html)** | Interactive walkthroughs (rename pass later) |
+| **3b** | **[explorer/index.html](./explorer/index.html)** | Isometric map of services, data, and the resolve loop |
 | — | **[COUPLER_OPTION_A_VS_B.md](./COUPLER_OPTION_A_VS_B.md)** | Multi-sink ExpandKey frontier (A) vs peel (B) — **A is v1**; keep for pivot |
 | — | **[FIXTURE_STUDIO.md](./FIXTURE_STUDIO.md)** | Golden authoring UI design |
 
@@ -35,4 +36,5 @@ StationType · Station · Track · Link · Setup · Tasking · Task · Request �
 ```bash
 open docs/BUILD_SPEC.md
 open docs/booking-assembler-design.html?scenario=simple
+open docs/explorer/index.html
 ```
